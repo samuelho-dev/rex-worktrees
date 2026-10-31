@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2024", "module": "Preserve", "moduleResolution": "Bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "types": ["bun"], "allowImportingTsExtensions": true,
+    "plugins": [{ "name": "@effect/language-service", "diagnosticSeverity": {
+      "unsafeEffectTypeAssertion": "error",
+      "anyUnknownInErrorContext": "error",
+      "missingEffectError": "error",
+      "missingEffectContext": "error",
+      "floatingEffectInVitest": "error",
+      "unstableApiUsage": "off"
+    } }]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
