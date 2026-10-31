@@ -6,6 +6,7 @@ import { AppError, BlockIdSchema, ClientIdSchema, CliBooleanFlagSchema, CliStrin
 import { hostRequest } from "./host.ts"
 import { closeManagedPopup, openPopup, originDirectory } from "./rex.ts"
 import { setup } from "./setup.ts"
+import { popup } from "./ui.ts"
 import { task } from "./worktrees.ts"
 // Replaced by `bun build --define`; undefined in source-mode Bun.
 declare const REX_WORKTREES_COMPILED: boolean
@@ -78,7 +79,6 @@ const main = Effect.gen(function* () {
       : flags["--no-context"] ? Effect.succeed(undefined)
       : args.length && sessionId && blockId ? originDirectory(sessionId, blockId)
       : Effect.succeed(process.cwd())
-    const { popup } = yield* Effect.tryPromise({ try: () => import("./ui.ts"), catch: cause => new AppError({ message: "Failed loading popup UI", cause }) })
     yield* popup(executable, context, origin, flags["--host"])
     if (flags["--managed-popup"]) yield* closeManagedPopup
     return
