@@ -4,18 +4,28 @@ Rex Worktrees opens Git worktrees in an exact [Rex](https://www.superlogical.com
 
 ## Install
 
-The standalone release requires Git and a running local Rex server with the Rex CLI available. **Bun is not required to run it.** Prebuilt binaries support Apple Silicon Macs running macOS 15 or later.
+The standalone executable supports Apple Silicon Macs running macOS 15 or later. Git, a running local Rex server, and the Rex CLI are required. Node.js and npm are needed to install the npm package, but not to run the executable; Bun is not required.
 
-### Homebrew
+### npm
 
 ```sh
-brew install samuelho-dev/tap/rex-worktrees
-"$(brew --prefix rex-worktrees)/bin/rex-worktrees" setup \
-  --bin "$(brew --prefix rex-worktrees)/bin/rex-worktrees"
+npm install -g rex-worktrees
+rex-worktrees setup --bin "$(npm root -g)/rex-worktrees/dist/rex-worktrees"
 rex config reload
 ```
 
-The registration uses Homebrew's stable `opt` path, so Rex follows package upgrades rather than using a copied executable. After `brew upgrade`, repeat setup and config reload.
+`--bin` registers the executable in the global npm package rather than copying it, so the path continues to work after package upgrades under the same npm global prefix. After an upgrade, repeat setup and `rex config reload` to update the Rex integration.
+
+### GitHub Releases
+
+Download the Apple Silicon binary archive from [GitHub Releases](https://github.com/samuelho-dev/rex-worktrees/releases) and extract it to a permanent location. Run setup with the absolute path to the extracted executable:
+
+```sh
+/absolute/path/to/rex-worktrees setup --bin /absolute/path/to/rex-worktrees
+rex config reload
+```
+
+Keep the executable at that path when replacing it with a newer release, then repeat setup and `rex config reload`. Each release also provides the relinkable application bundle and matching runtime sources described below.
 
 ### Build from source
 
@@ -28,11 +38,11 @@ bun run build
 rex config reload
 ```
 
-Source-build setup copies the executable to `~/.local/bin/rex-worktrees`; `setup --bin PATH` instead registers an existing package-managed executable without copying or modifying it. Add `~/.local/bin` to `PATH` for source-build CLI use.
+Source-build setup copies the executable to `~/.local/bin/rex-worktrees`; `setup --bin PATH` instead registers an existing executable without copying or modifying it. Add `~/.local/bin` to `PATH` for source-build CLI use.
 
-Both modes install the Lua module beside the active Rex config and add a managed registration without replacing unrelated config. Setup needs `rex` on `PATH`, or `REX_BIN_DIR` set to its absolute directory. Setup from uncompiled source is not supported. Each execution machine needs its own installation; setup does not pair or deploy to another host.
+All installation methods place the Lua module beside the active Rex config and add a managed registration without replacing unrelated config. Setup needs `rex` on `PATH`, or `REX_BIN_DIR` set to its absolute directory. Setup from uncompiled source is not supported. Each execution machine needs its own installation; setup does not pair or deploy to another host.
 
-To update a source build, rebuild and repeat setup and config reload. To uninstall, locate the active Rex config with `rex config check --json`, remove the section from `-- BEGIN rex-worktrees` through `-- END rex-worktrees`, and delete `rex-worktrees.lua` beside that config. Remove the executable with `brew uninstall rex-worktrees`, or delete `~/.local/bin/rex-worktrees` for a source installation, then run `rex config reload`. Git worktrees and association state are retained.
+To update a source build, rebuild and repeat setup and config reload. To uninstall, locate the active Rex config with `rex config check --json`, remove the section from `-- BEGIN rex-worktrees` through `-- END rex-worktrees`, and delete `rex-worktrees.lua` beside that config. Remove the executable with `npm uninstall -g rex-worktrees`, or delete the standalone executable or `~/.local/bin/rex-worktrees` for other installations, then run `rex config reload`. Git worktrees and association state are retained.
 
 ## Open a worktree
 

@@ -1,17 +1,22 @@
 {
   "name": "rex-worktrees",
   "version": "0.1.1",
-  "private": true,
   "license": "MIT",
+  "author": "Samuel Ho",
+  "repository": { "type": "git", "url": "git+https://github.com/samuelho-dev/rex-worktrees.git" },
+  "homepage": "https://github.com/samuelho-dev/rex-worktrees#readme",
+  "bugs": { "url": "https://github.com/samuelho-dev/rex-worktrees/issues" },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["dist/rex-worktrees", "dist/rex-worktrees.js", "licenses/THIRD-PARTY-NOTICES", "LICENSE", "README.md"],
   "packageManager": "bun@1.3.13",
   "type": "module",
-  "bin": { "rex-worktrees": "bin/rex-worktrees" },
+  "bin": { "rex-worktrees": "dist/rex-worktrees" },
   "scripts": {
     "start": "bun src/main.ts",
     "check": "effect-tsgo tsc --noEmit && effect-tsgo oxlint src test",
     "test": "bun run --bun vitest run --pool=forks",
     "build": "bun build src/main.ts --compile --define REX_WORKTREES_COMPILED=true --outfile dist/rex-worktrees"
   },
-  "dependencies": { "effect": "4.1.0", "@effect/platform-bun": "4.1.0" },
-  "devDependencies": { "@effect/tsgo": "0.63.0", "@effect/vitest": "4.1.0", "@types/bun": "1.3.13", "oxlint": "1.90.0", "typescript": "7.0.2", "vitest": "5.0.5" }
+  "devDependencies": { "effect": "4.1.0", "@effect/platform-bun": "4.1.0", "@effect/tsgo": "0.63.0", "@effect/vitest": "4.1.0", "@types/bun": "1.3.13", "oxlint": "1.90.0", "typescript": "7.0.2", "vitest": "5.0.5" }
 }
