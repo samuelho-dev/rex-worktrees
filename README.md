@@ -25,7 +25,7 @@ Download the Apple Silicon binary archive from [GitHub Releases](https://github.
 rex config reload
 ```
 
-Keep the executable at that path when replacing it with a newer release, then repeat setup and `rex config reload`. Each release also provides the relinkable application bundle and matching runtime sources described below.
+Keep the executable at that path when replacing it with a newer release, then repeat setup and `rex config reload`. Each application archive also contains the relinkable bundle and license notices described below.
 
 ### Build from source
 
@@ -135,7 +135,7 @@ Project code is [MIT-licensed](LICENSE). The standalone executable embeds Bun; b
 <details>
 <summary>Rebuilding with a modified runtime</summary>
 
-Each [release](https://github.com/samuelho-dev/rex-worktrees/releases) includes the application's relinkable `rex-worktrees.js` bundle in the binary archive, plus matching Bun, WebKit/JavaScriptCore, and tinycc source archives. `SHA256SUMS` covers every download.
+Each application [release](https://github.com/samuelho-dev/rex-worktrees/releases) includes the relinkable `rex-worktrees.js` bundle, README, MIT license, and third-party notices in its binary archive. The matching Bun 1.3.13 runtime sources are available from the fixed [runtime-source release (v0.1.1)](https://github.com/samuelho-dev/rex-worktrees/releases/tag/v0.1.1): [Bun source](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore source](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), and [tinycc source](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz). Each release's `SHA256SUMS` covers its own downloadable assets; use [v0.1.1 checksums](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS) for runtime sources.
 
 Runtime source revisions are Bun 1.3.13 (`bf2e2cecf27e800962b1e7f03d66278f9d5d2e79`), WebKit (`4d5e75ebd84a14edbc7ae264245dcd77fe597c10`), and tinycc (`12882eee073cfe5c7621bcfadf679e1372d4537b`). Rebuilding requires the toolchain described in [Bun's contributing guide](https://github.com/oven-sh/bun/blob/bun-v1.3.13/CONTRIBUTING.md), including its LLVM requirements.
 
