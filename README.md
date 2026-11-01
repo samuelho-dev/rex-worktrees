@@ -4,7 +4,7 @@ Rex Worktrees opens Git worktrees or Jujutsu (JJ) workspaces in an exact [Rex](h
 
 ## Install
 
-The standalone executable supports Apple Silicon Macs running macOS 15 or later. Git 2.42 or later, a running local Rex server, and the Rex CLI are required; JJ projects additionally require Jujutsu 0.46 or later. Node.js and npm are needed to install the npm package, but not to run the executable; Bun is not required.
+Standalone binaries are built for Apple Silicon Macs running macOS 15 or later and Linux x64 (Ubuntu 24.04 CI runner). Git 2.42 or later, the Rex CLI, and a running local Rex server are required for interactive use; JJ projects additionally require Jujutsu 0.46 or later. Node.js and npm are needed only to install the macOS ARM64 npm package, not to run either standalone executable; Bun is not required.
 
 ### npm
 
@@ -18,14 +18,14 @@ rex config reload
 
 ### GitHub Releases
 
-Download the Apple Silicon binary archive from [GitHub Releases](https://github.com/samuelho-dev/rex-worktrees/releases) and extract it to a permanent location. Run setup with the absolute path to the extracted executable:
+Download both `rex-worktrees-macos-arm64.tar.gz` and `rex-worktrees-linux-x64.tar.gz` plus `SHA256SUMS` from [the latest GitHub Release](https://github.com/samuelho-dev/rex-worktrees/releases/latest). Verify them with `shasum -a 256 -c SHA256SUMS` (or `sha256sum -c SHA256SUMS` on Linux), then extract the archive for your platform to a permanent location. Run setup with the absolute path to the extracted executable:
 
 ```sh
 /absolute/path/to/rex-worktrees setup --bin /absolute/path/to/rex-worktrees
 rex config reload
 ```
 
-Keep the executable at that path when replacing it with a newer release, then repeat setup and `rex config reload`. Each application archive also contains the relinkable bundle and license notices described below.
+Keep the executable at that path when replacing it with a newer release, then repeat setup and `rex config reload`. Each platform archive contains the relinkable bundle and license notices described below. The stable asset names can be fetched through `releases/latest/download/` without pinning a release version.
 
 ### Build from source
 
@@ -41,6 +41,8 @@ rex config reload
 Source-build setup copies the executable to `~/.local/bin/rex-worktrees`; `setup --bin PATH` instead registers an existing executable without copying or modifying it. Add `~/.local/bin` to `PATH` for source-build CLI use.
 
 All installation methods place the Lua module beside the active Rex config and add a managed registration without replacing unrelated config. Setup needs `rex` on `PATH`, or `REX_BIN_DIR` set to its absolute directory. Setup from uncompiled source is not supported. Setup records **this host's executable search `PATH`** for stored Rex actions, whose server-side process may otherwise lack shell-installed tools; run setup from a shell that can find Git and, for JJ projects, `jj`, then `rex config reload`. Repeat setup and reload after changing the tools' search path. Each execution machine needs its own helper installation and, for JJ projects, its own JJ and Git installations; setup does not pair or deploy to another host. The source machine also needs the helper to inspect clone sources.
+
+For a stopped Rex server or an image built before Rex starts, run `rex-worktrees setup --config /absolute/path/to/rex/init.lua --bin /absolute/path/to/rex-worktrees`. This uses that explicit config without calling `rex config check`, starting Rex, or reloading it; its managed action registration is loaded when Rex next starts. The file must be a regular file or absent (not a symlink), and the Rex CLI must still be installed in `PATH` or `REX_BIN_DIR` so its directory can be recorded. The managed registration preserves unrelated Lua settings and is safe to repeat.
 
 To update a source build, rebuild and repeat setup and config reload. To uninstall, locate the active Rex config with `rex config check --json`, remove the section from `-- BEGIN rex-worktrees` through `-- END rex-worktrees`, and delete `rex-worktrees.lua` beside that config. Remove the executable with `npm uninstall -g rex-worktrees`, or delete the standalone executable or `~/.local/bin/rex-worktrees` for other installations, then run `rex config reload`. Git worktrees, JJ workspaces, and association state are retained.
 
@@ -123,7 +125,7 @@ rex-worktrees open --repo /absolute/path/jj-workspace \
 
 A submitted checkout or clone task can continue after the chooser closes, and closing a tab does not delete its checkout or clone. If a launch times out or Rex reports an uncertain result, inspect the destination repository and exact session before retrying; partial/registered JJ workspaces and clone destinations are retained rather than blindly removed or retried. Opening or browsing an existing JJ workspace does not snapshot, edit, update-stale, rebase, or move bookmarks. **Creating a JJ workspace invokes native `jj workspace add`, which may snapshot the actual source workspace and change its JJ working-copy commit and Git index intent-to-add entries**; the review notice names that source. Git worktrees keep their separate files, HEAD, and index while sharing refs, objects, remotes, and config. The tool does not force checkout, switch, stash, reset, clean, or prune. A cross-host clone transfers only published Git history from the source origin, not uncommitted files, local-only commits/branches/changes, source credentials, or environment. An explicitly pinned JJ base must be reachable after destination clone or the retained clone requires inspection; omitting a pin uses the clone's native default. Destination credentials and network access must work independently. Shells are not confined to the checkout. Associations live per destination at `${XDG_STATE_HOME:-~/.local/state}/rex-worktrees/associations`; Git/JJ inventory remains authoritative if an association becomes stale.
 
-Local macOS execution is supported. Cross-host execution and cloning are experimental; Linux destinations have not been verified against a live remote Rex/JJ setup. Each execution machine requires a matching Rex Worktrees build (older helper protocols are rejected), its own Git/JJ executables as applicable, and a connected Rex host. Native app navigation requires Rex Remote Control permission. Local endpoints must be Unix endpoints; Windows named pipes are not supported. For a custom local Unix server, set `REX_WORKTREES_LOCAL_ENDPOINT=unix:///absolute/path/server.sock` in the plugin environment.
+The release workflow builds and checks macOS ARM64 and Linux x64 executables in their native CI runners, including Git/JJ integration tests and malformed-request smoke checks. Linux destinations have not been verified against a live remote Rex/JJ setup; cross-host execution and cloning remain experimental. Each execution machine requires a matching Rex Worktrees build (older helper protocols are rejected), its own Git/JJ executables as applicable, and a connected Rex host. Native app navigation requires Rex Remote Control permission. Local endpoints must be Unix endpoints; Windows named pipes are not supported. For a custom local Unix server, set `REX_WORKTREES_LOCAL_ENDPOINT=unix:///absolute/path/server.sock` in the plugin environment.
 
 ## Contributing
 

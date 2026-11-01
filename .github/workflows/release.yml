@@ -12,18 +12,31 @@ permissions:
 
 jobs:
   check:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: ubuntu-24.04
+            platform: linux-x64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.13
-      - name: Verify macOS ARM64 and release version
+      - name: Verify runner architecture and release version
         shell: bash
         run: |
-          test "$(uname -s)" = Darwin
-          test "$(uname -m)" = arm64
+          case "${{ matrix.platform }}" in
+            macos-arm64) test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64 ;;
+            linux-x64) test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64 ;;
+          esac
           test "$(bun --version)" = 1.3.13
+          if [[ "${{ matrix.platform }}" == linux-x64 ]]; then
+            printf '2.42.0\n%s\n' "$(git version | cut -d' ' -f3)" | sort -V -C
+          fi
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             version="$(bun -p 'require("./package.json").version')"
             test "$GITHUB_REF_NAME" = "v$version"
@@ -31,17 +44,34 @@ jobs:
       - name: Install verified JJ 0.46.0
         shell: bash
         run: |
-          curl -fLsS -o "$RUNNER_TEMP/jj.tar.gz" https://github.com/jj-vcs/jj/releases/download/v0.46.0/jj-v0.46.0-aarch64-apple-darwin.tar.gz
-          printf '%s  %s\n' 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58 "$RUNNER_TEMP/jj.tar.gz" | shasum -a 256 -c -
+          case "${{ matrix.platform }}" in
+            macos-arm64)
+              asset=jj-v0.46.0-aarch64-apple-darwin.tar.gz
+              digest=43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58
+              ;;
+            linux-x64)
+              asset=jj-v0.46.0-x86_64-unknown-linux-musl.tar.gz
+              digest=fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08
+              ;;
+          esac
+          curl -fLsS -o "$RUNNER_TEMP/jj.tar.gz" "https://github.com/jj-vcs/jj/releases/download/v0.46.0/$asset"
+          printf '%s  %s\n' "$digest" "$RUNNER_TEMP/jj.tar.gz" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/jj-bin"
           tar -xzf "$RUNNER_TEMP/jj.tar.gz" -C "$RUNNER_TEMP/jj-bin" ./jj
           echo "$RUNNER_TEMP/jj-bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run test
-      - run: bun run build
-      - name: Verify portable signed macOS ARM64 executable
+      - name: Compile native executable
         shell: bash
+        run: |
+          if [[ "${{ matrix.platform }}" == linux-x64 ]]; then
+            bun build src/main.ts --compile --target=bun-linux-x64-baseline --define REX_WORKTREES_COMPILED=true --outfile dist/rex-worktrees
+          else
+            bun run build
+          fi
+      - name: Verify portable signed macOS ARM64 executable
+        if: matrix.platform == 'macos-arm64'
         run: |
           test "$(lipo -archs dist/rex-worktrees)" = arm64
           otool -L dist/rex-worktrees | awk 'NR > 1 { print $1 }' | while IFS= read -r library; do
@@ -57,44 +87,59 @@ jobs:
             echo 'Malformed JSON was accepted' >&2
             exit 1
           fi
-      - name: Pack macOS ARM64 release
+      - name: Verify Linux x64 baseline executable
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          file dist/rex-worktrees | grep -q 'ELF 64-bit LSB.*x86-64'
+          readelf -h dist/rex-worktrees | grep -q 'Machine:.*Advanced Micro Devices X86-64'
+          dist/rex-worktrees help | grep -q 'rex-worktrees'
+          if printf '{' | dist/rex-worktrees host-request >/dev/null 2>&1; then
+            echo 'Malformed JSON was accepted' >&2
+            exit 1
+          fi
+      - name: Pack platform release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          archive="rex-worktrees-${GITHUB_REF_NAME#v}-macos-arm64.tar.gz"
+          archive="rex-worktrees-${{ matrix.platform }}.tar.gz"
           mkdir -p release/licenses
           cp dist/rex-worktrees LICENSE README.md release/
           cp licenses/THIRD-PARTY-NOTICES release/licenses/
           bun build src/main.ts --target=bun --define REX_WORKTREES_COMPILED=true --outfile release/rex-worktrees.js
           tar -czf "$archive" -C release rex-worktrees rex-worktrees.js README.md LICENSE licenses/THIRD-PARTY-NOTICES
-          shasum -a 256 "$archive" > SHA256SUMS
-          shasum -a 256 -c SHA256SUMS
+          shasum -a 256 "$archive" > "rex-worktrees-${{ matrix.platform }}.sha256"
+          shasum -a 256 -c "rex-worktrees-${{ matrix.platform }}.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: macos-arm64-release
+          name: ${{ matrix.platform }}-release
           path: |
-            rex-worktrees-*-macos-arm64.tar.gz
-            SHA256SUMS
+            rex-worktrees-${{ matrix.platform }}.tar.gz
+            rex-worktrees-${{ matrix.platform }}.sha256
           if-no-files-found: error
           retention-days: 7
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: check
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: macos-arm64-release
-      - name: Publish verified binary
+          pattern: '*-release'
+          merge-multiple: true
+      - name: Publish verified binaries
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          shasum -a 256 -c SHA256SUMS
-          gh release create "$GITHUB_REF_NAME" rex-worktrees-*-macos-arm64.tar.gz SHA256SUMS \
+          test -f rex-worktrees-macos-arm64.tar.gz
+          test -f rex-worktrees-linux-x64.tar.gz
+          cat rex-worktrees-macos-arm64.sha256 rex-worktrees-linux-x64.sha256 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" rex-worktrees-macos-arm64.tar.gz rex-worktrees-linux-x64.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes 'macOS ARM64 standalone executable, relinkable bundle, README, MIT license, and third-party notices in the archive. Native JJ 0.46 support, Start from mainline source/default snapshot semantics, and native source-cwd fallback fix. JJ integration requires the matching rex-worktrees 0.2.0 helper (protocol 3). Matching Bun 1.3.13 runtime sources from v0.1.1: [Bun](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), [tinycc](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz); verify them against [v0.1.1 SHA256SUMS](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS). The SHA256SUMS in this release covers its application archive.'
+            --notes 'Native macOS ARM64 and Linux x64 standalone executables, relinkable bundles, README, MIT license, and third-party notices in each archive. Git 2.42+ and JJ 0.46+ are required for JJ integration on each host. Matching Bun 1.3.13 runtime sources from v0.1.1: [Bun](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), [tinycc](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz); verify them against [v0.1.1 SHA256SUMS](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS). This release SHA256SUMS covers both application archives.'
