@@ -26,20 +26,44 @@ export type BlockId = typeof BlockIdSchema.Type
 export const LayerIdSchema = Schema.String.pipe(Schema.brand("LayerId"))
 export type LayerId = typeof LayerIdSchema.Type
 
-export const RepositorySchema = Schema.Struct({ path: Schema.String, commonDir: Schema.String, name: Schema.String })
+export const VcsSchema = Schema.Literals(["git", "jj"])
+export type Vcs = typeof VcsSchema.Type
+const RepositoryFields = { path: Schema.String, commonDir: Schema.String, name: Schema.String }
+export const GitRepositorySchema = Schema.Struct({ vcs: Schema.Literal("git"), ...RepositoryFields })
+export type GitRepository = typeof GitRepositorySchema.Type
+export const JjRepositorySchema = Schema.Struct({ vcs: Schema.Literal("jj"), ...RepositoryFields })
+export type JjRepository = typeof JjRepositorySchema.Type
+export const RepositorySchema = Schema.Union([GitRepositorySchema, JjRepositorySchema])
+export type Repository = typeof RepositorySchema.Type
+export const JjWorkspaceNameSchema = Schema.String.pipe(Schema.brand("JjWorkspaceName"))
+export type JjWorkspaceName = typeof JjWorkspaceNameSchema.Type
+export const JjCommitIdSchema = Schema.String.pipe(Schema.brand("JjCommitId"))
+export type JjCommitId = typeof JjCommitIdSchema.Type
+export const JjChangeIdSchema = Schema.String.pipe(Schema.brand("JjChangeId"))
+export type JjChangeId = typeof JjChangeIdSchema.Type
+export const JjRevisionSchema = Schema.Struct({ commitId: JjCommitIdSchema, changeId: JjChangeIdSchema, description: Schema.String })
+export type JjRevision = typeof JjRevisionSchema.Type
+export const JjRevisionChoiceSchema = Schema.Struct({ expression: Schema.String, label: Schema.String, revision: JjRevisionSchema })
+export type JjRevisionChoice = typeof JjRevisionChoiceSchema.Type
 export const RepositoryHeadSchema = Schema.Struct({ branch: Schema.NullOr(Schema.String), head: Schema.String })
 export type RepositoryHead = typeof RepositoryHeadSchema.Type
-export type Repository = typeof RepositorySchema.Type
-export const WorktreeSchema = Schema.Struct({
-  path: Schema.String,
+export const GitWorktreeSchema = Schema.Struct({
+  vcs: Schema.Literal("git"), path: Schema.String,
   branch: Schema.mutableKey(Schema.NullOr(Schema.String)),
   head: Schema.mutableKey(Schema.String),
   bare: Schema.mutableKey(Schema.Boolean),
   locked: Schema.mutableKey(Schema.Boolean),
   prunable: Schema.mutableKey(Schema.Boolean)
 })
+export type GitWorktree = typeof GitWorktreeSchema.Type
+export const JjWorktreeSchema = Schema.Struct({
+  vcs: Schema.Literal("jj"), path: Schema.NullOr(Schema.String), name: JjWorkspaceNameSchema,
+  head: JjCommitIdSchema, changeId: JjChangeIdSchema, present: Schema.Boolean, colocated: Schema.Boolean
+})
+export type JjWorktree = typeof JjWorktreeSchema.Type
+export const WorktreeSchema = Schema.Union([GitWorktreeSchema, JjWorktreeSchema])
 export type Worktree = typeof WorktreeSchema.Type
-export const WorktreePlanSchema = Schema.Struct({ repository: RepositorySchema, path: Schema.String, branch: Schema.String, existing: Schema.Boolean })
+export const WorktreePlanSchema = Schema.Struct({ repository: GitRepositorySchema, path: Schema.String, branch: Schema.String, existing: Schema.Boolean })
 export type WorktreePlan = typeof WorktreePlanSchema.Type
 export const CreateWorktreeOptionsSchema = Schema.Struct({
   startPoint: Schema.optional(Schema.String), attachOnly: Schema.optional(Schema.Boolean),
@@ -62,10 +86,10 @@ export const ResolvedConfigSchema = Schema.Struct({
   projectRoots: Schema.Array(Schema.Struct({ path: Schema.String, worktreeRoot: Schema.String }))
 })
 export type ResolvedConfig = typeof ResolvedConfigSchema.Type
-export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String) })
+export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String) })
 export type Install = typeof InstallSchema.Type
 export const AssociationSchema = Schema.Struct({
-  hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
+  vcs: VcsSchema, hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
   sessionId: SessionIdSchema, windowId: WindowIdSchema, blockId: BlockIdSchema
 })
 export type Association = typeof AssociationSchema.Type
@@ -78,52 +102,142 @@ export const MachineSchema = Schema.Struct({ key: Schema.Union([Schema.Literal("
 export type Machine = typeof MachineSchema.Type
 export const DestinationHostSchema = Schema.Struct({ ...MachineSchema.fields, hostId: ServerHostIdSchema })
 export type DestinationHost = typeof DestinationHostSchema.Type
-export const LaunchInputSchema = Schema.Struct({
-  repo: Schema.String, sessionId: SessionIdSchema, name: Schema.String,
-  branch: Schema.optional(Schema.String), worktreeName: Schema.optional(Schema.String), path: Schema.optional(Schema.String), clientId: Schema.optional(ClientIdSchema),
-  additional: Schema.optional(Schema.Boolean), split: Schema.optional(Schema.Boolean)
+export const GitCloneSourceSchema = Schema.Struct({
+  vcs: Schema.Literal("git"), url: Schema.String, sourceHostId: ServerHostIdSchema,
+  branches: Schema.Array(Schema.String), branch: Schema.optional(Schema.String)
 })
+export type GitCloneSource = typeof GitCloneSourceSchema.Type
+export const JjCloneSourceSchema = Schema.Struct({
+  vcs: Schema.Literal("jj"), url: Schema.String, sourceHostId: ServerHostIdSchema,
+  revisions: Schema.Array(JjRevisionChoiceSchema), revision: Schema.optional(JjRevisionSchema)
+})
+export type JjCloneSource = typeof JjCloneSourceSchema.Type
+export const CloneSourceSchema = Schema.Union([GitCloneSourceSchema, JjCloneSourceSchema])
+export type CloneSource = typeof CloneSourceSchema.Type
+export const GitCloneInputSchema = Schema.Struct({
+  vcs: Schema.Literal("git"), source: GitCloneSourceSchema, repo: Schema.String, sessionId: SessionIdSchema,
+  clientId: Schema.optional(ClientIdSchema), name: Schema.String, branch: Schema.String,
+  branchMode: Schema.Literals(["existing", "create"]), worktreeName: Schema.optional(Schema.String)
+})
+export type GitCloneInput = typeof GitCloneInputSchema.Type
+export const JjCloneInputSchema = Schema.Struct({
+  vcs: Schema.Literal("jj"), source: JjCloneSourceSchema, repo: Schema.String, sessionId: SessionIdSchema,
+  clientId: Schema.optional(ClientIdSchema), name: Schema.String,
+  worktreeName: Schema.optional(Schema.String), revision: Schema.optional(Schema.String)
+})
+export type JjCloneInput = typeof JjCloneInputSchema.Type
+export const CloneInputSchema = Schema.Union([GitCloneInputSchema, JjCloneInputSchema])
+export type CloneInput = typeof CloneInputSchema.Type
+const ClonePlanFields = {
+  hostId: ServerHostIdSchema, sessionId: SessionIdSchema, clientId: Schema.optional(ClientIdSchema),
+  repo: Schema.String, existing: Schema.Boolean, commonDir: Schema.optional(Schema.String),
+  label: Schema.String, detail: Schema.optional(Schema.String), warning: Schema.optional(Schema.String)
+}
+export const GitClonePlanSchema = Schema.Struct({
+  ...ClonePlanFields, vcs: Schema.Literal("git"), input: GitCloneInputSchema, base: Schema.optional(Schema.String)
+})
+export type GitClonePlan = typeof GitClonePlanSchema.Type
+export const JjClonePlanSchema = Schema.Struct({
+  ...ClonePlanFields, vcs: Schema.Literal("jj"), input: JjCloneInputSchema, base: Schema.optional(JjRevisionSchema)
+})
+export type JjClonePlan = typeof JjClonePlanSchema.Type
+export const ClonePlanSchema = Schema.Union([GitClonePlanSchema, JjClonePlanSchema])
+export type ClonePlan = typeof ClonePlanSchema.Type
+export const CloneLaunchResultSchema = Schema.Struct({
+  hostId: ServerHostIdSchema, sessionId: SessionIdSchema, windowId: WindowIdSchema, blockId: BlockIdSchema,
+  repo: Schema.String, pending: Schema.Literal(true), warning: Schema.optional(Schema.String)
+})
+export type CloneLaunchResult = typeof CloneLaunchResultSchema.Type
+export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String) })
+export type CloneTaskRequest = typeof CloneTaskRequestSchema.Type
+const LaunchInputFields = {
+  repo: Schema.String, sessionId: SessionIdSchema, name: Schema.String,
+  clientId: Schema.optional(ClientIdSchema), additional: Schema.optional(Schema.Boolean), split: Schema.optional(Schema.Boolean)
+}
+export const GitLaunchInputSchema = Schema.Struct({
+  ...LaunchInputFields, vcs: Schema.Literal("git"), branch: Schema.optional(Schema.String),
+  worktreeName: Schema.optional(Schema.String), path: Schema.optional(Schema.String)
+})
+export type GitLaunchInput = typeof GitLaunchInputSchema.Type
+export const JjLaunchInputSchema = Schema.Struct({
+  ...LaunchInputFields, vcs: Schema.Literal("jj"), path: Schema.optional(Schema.String),
+  worktreeName: Schema.optional(Schema.String), revision: Schema.optional(Schema.String)
+})
+export type JjLaunchInput = typeof JjLaunchInputSchema.Type
+export const LaunchInputSchema = Schema.Union([GitLaunchInputSchema, JjLaunchInputSchema])
 export type LaunchInput = typeof LaunchInputSchema.Type
-export const LaunchPlanSchema = Schema.Struct({
-  input: LaunchInputSchema, hostId: ServerHostIdSchema, sessionId: SessionIdSchema, clientId: Schema.optional(ClientIdSchema),
-  path: Schema.String, branch: Schema.NullOr(Schema.String), checkout: Schema.Literals(["existing", "attach", "create"]),
-  worktreeRoot: Schema.optional(Schema.String), base: Schema.optional(RepositoryHeadSchema),
+const LaunchPlanFields = {
+  hostId: ServerHostIdSchema, sessionId: SessionIdSchema, clientId: Schema.optional(ClientIdSchema),
+  path: Schema.String, worktreeRoot: Schema.optional(Schema.String),
   action: Schema.Literals(["focus", "new-tab", "split"]),
   target: Schema.optional(Schema.Struct({ windowId: WindowIdSchema, blockId: BlockIdSchema, label: Schema.String })),
   nameRole: Schema.Literals(["tab", "pane", "none"]), name: Schema.optional(Schema.String),
   label: Schema.String, detail: Schema.optional(Schema.String), warning: Schema.optional(Schema.String)
+}
+export const GitLaunchPlanSchema = Schema.Struct({
+  ...LaunchPlanFields, vcs: Schema.Literal("git"), input: GitLaunchInputSchema,
+  branch: Schema.NullOr(Schema.String), checkout: Schema.Literals(["existing", "attach", "create"]),
+  base: Schema.optional(RepositoryHeadSchema)
 })
+export type GitLaunchPlan = typeof GitLaunchPlanSchema.Type
+export const JjLaunchPlanSchema = Schema.Struct({
+  ...LaunchPlanFields, vcs: Schema.Literal("jj"), input: JjLaunchInputSchema,
+  checkout: Schema.Literals(["existing", "create"]), workspaceName: JjWorkspaceNameSchema,
+  base: Schema.optional(JjRevisionSchema)
+})
+export type JjLaunchPlan = typeof JjLaunchPlanSchema.Type
+export const LaunchPlanSchema = Schema.Union([GitLaunchPlanSchema, JjLaunchPlanSchema])
 export type LaunchPlan = typeof LaunchPlanSchema.Type
 export const LaunchResultSchema = Schema.Struct({
   hostId: ServerHostIdSchema, sessionId: SessionIdSchema, windowId: WindowIdSchema, blockId: BlockIdSchema,
   path: Schema.String, pending: Schema.Boolean, action: Schema.Literals(["focus", "new-tab", "split"]), warning: Schema.optional(Schema.String)
 })
 export type LaunchResult = typeof LaunchResultSchema.Type
-export const TaskRequestSchema = Schema.Struct({
-  repo: Schema.String, hostId: ServerHostIdSchema, rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String),
-  path: Schema.String, commonDir: Schema.String, sessionId: SessionIdSchema,
-  branch: Schema.optional(Schema.String), worktreeName: Schema.optional(Schema.String), base: Schema.optional(Schema.String),
-  worktreeRoot: Schema.optional(Schema.String), checkout: Schema.optional(Schema.Literals(["attach", "existing"]))
+const TaskRequestFields = {
+  repo: Schema.String, hostId: ServerHostIdSchema, rexBinDir: Schema.optional(Schema.String),
+  rexLocalEndpoint: Schema.optional(Schema.String), path: Schema.String, commonDir: Schema.String,
+  sessionId: SessionIdSchema, worktreeRoot: Schema.optional(Schema.String)
+}
+export const GitTaskRequestSchema = Schema.Struct({
+  ...TaskRequestFields, vcs: Schema.Literal("git"), branch: Schema.optional(Schema.String),
+  worktreeName: Schema.optional(Schema.String), base: Schema.optional(Schema.String),
+  checkout: Schema.optional(Schema.Literals(["attach", "existing"]))
 })
+export type GitTaskRequest = typeof GitTaskRequestSchema.Type
+export const JjTaskRequestSchema = Schema.Struct({
+  ...TaskRequestFields, vcs: Schema.Literal("jj"), checkout: Schema.Literals(["existing", "create"]),
+  workspaceName: JjWorkspaceNameSchema, base: Schema.optional(JjRevisionSchema)
+})
+export type JjTaskRequest = typeof JjTaskRequestSchema.Type
+export const TaskRequestSchema = Schema.Union([GitTaskRequestSchema, JjTaskRequestSchema])
 export type TaskRequest = typeof TaskRequestSchema.Type
-export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(2), hostId: ServerHostIdSchema })
+export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(3), hostId: ServerHostIdSchema })
 export type RequestIdentity = typeof RequestIdentitySchema.Type
 export const RequestSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), context: Schema.optional(Schema.String) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), repo: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), path: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), repo: Schema.String }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("revision"), repo: Schema.String, revision: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("branch"), repo: Schema.String, branch: Schema.String, worktreeName: Schema.optional(Schema.String) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("plan"), input: LaunchInputSchema }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-plan"), input: CloneInputSchema }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-launch"), input: CloneInputSchema, reviewed: ClonePlanSchema }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("launch"), input: LaunchInputSchema, reviewed: LaunchPlanSchema })
 ])
 export type Request = typeof RequestSchema.Type
 export type RequestBody<R = Request> = R extends Request ? Omit<R, keyof RequestIdentity> : never
 export const ResponseSchema = Schema.Union([
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), checkout: Schema.optional(RepositorySchema) }),
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String) }),
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), roots: Schema.optional(Schema.Array(Schema.String)), checkout: Schema.optional(RepositorySchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project-missing"), path: Schema.String }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), source: CloneSourceSchema }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), repository: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("branch"), path: Schema.String, branch: Schema.String, existing: Schema.Boolean }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("revision"), revision: JjRevisionSchema }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("plan"), plan: LaunchPlanSchema }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-plan"), plan: ClonePlanSchema }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-launch"), result: CloneLaunchResultSchema }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("launch"), result: LaunchResultSchema })
 ])
 export type Response = typeof ResponseSchema.Type
@@ -170,13 +284,14 @@ export const RexHelperArgsSchema = Schema.Struct({ properties: Schema.Struct({ r
 export const RexConfigCheckSchema = Schema.Struct({ path: Schema.String, exists: Schema.Boolean, diagnostics: Schema.Array(Schema.Unknown) })
 
 export const CliBooleanFlagSchema = Schema.Literals(["--additional", "--split", "--no-context", "--managed-popup"])
-export const CliStringFlagSchema = Schema.Literals(["--bin", "--host", "--repo", "--session", "--name", "--branch", "--worktree", "--worktree-name", "--client", "--context", "--origin-session", "--origin-block", "--origin-client"])
+export const CliStringFlagSchema = Schema.Literals(["--bin", "--host", "--repo", "--session", "--name", "--branch", "--revision", "--worktree", "--worktree-name", "--client", "--context", "--origin-session", "--origin-block", "--origin-client"])
 export const CliFlagsSchema = Schema.Struct({
   "--additional": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--split": Schema.mutableKey(Schema.optional(Schema.Boolean)),
   "--no-context": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--managed-popup": Schema.mutableKey(Schema.optional(Schema.Boolean)),
   "--bin": Schema.mutableKey(Schema.optional(Schema.String)), "--host": Schema.mutableKey(Schema.optional(Schema.String)), "--repo": Schema.mutableKey(Schema.optional(Schema.String)),
   "--session": Schema.mutableKey(Schema.optional(SessionIdSchema)), "--name": Schema.mutableKey(Schema.optional(Schema.String)),
   "--branch": Schema.mutableKey(Schema.optional(Schema.String)), "--worktree": Schema.mutableKey(Schema.optional(Schema.String)),
+  "--revision": Schema.mutableKey(Schema.optional(Schema.String)),
   "--worktree-name": Schema.mutableKey(Schema.optional(Schema.String)), "--client": Schema.mutableKey(Schema.optional(ClientIdSchema)),
   "--context": Schema.mutableKey(Schema.optional(Schema.String)), "--origin-session": Schema.mutableKey(Schema.optional(SessionIdSchema)),
   "--origin-block": Schema.mutableKey(Schema.optional(BlockIdSchema)), "--origin-client": Schema.mutableKey(Schema.optional(ClientIdSchema))
@@ -205,16 +320,19 @@ export type InputChoiceState = { readonly text: string; readonly selected: numbe
 export type ProjectChoice = {
   readonly name: string
   readonly path?: string
-  readonly source?: { readonly machineKey: Machine["key"]; readonly hostId: ServerHostId; readonly repository: Repository }
+  readonly source?: { readonly machineKey: Machine["key"]; readonly hostId: ServerHostId; readonly repository: Repository; readonly checkoutPath?: string }
 }
 export type Destination =
-  | { readonly path: string; readonly branch?: never; readonly label: string }
-  | { readonly branch: string; readonly path?: never; readonly label: string }
+  | { readonly path: string; readonly branch?: never; readonly revision?: never; readonly label: string }
+  | { readonly branch: string; readonly path?: never; readonly revision?: never; readonly label: string }
+  | { readonly revision: string; readonly path?: never; readonly branch?: never; readonly label: string }
 export type Draft = {
   readonly machine?: Machine
   readonly host?: DestinationHost
   readonly projectChoice?: ProjectChoice
+  readonly clone?: CloneSource & { readonly repo: string }
   readonly project?: Repository
+  readonly sourcePath?: string
   readonly destination?: Destination
   readonly worktreeName?: string
   readonly sessionId?: SessionId

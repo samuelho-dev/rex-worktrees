@@ -32,7 +32,7 @@ it.live(
         const original =
           "-- custom Rex settings\nrex.action{ name = 'custom' }\n";
         const lua =
-          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\n-- custom Lua payload\nreturn {}\n";
+          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\n-- custom Lua payload\nreturn {}\n";
         const rexBinDir = join(root, "Rex Server.app", "Contents", "MacOS");
         yield* Effect.promise(() => mkdir(configDir, { recursive: true }));
         yield* Effect.promise(() => writeFile(source, "compiled-binary-v1"));
@@ -115,7 +115,7 @@ it.live("creates an absent Rex init next to the installed Lua module", () =>
         source,
         home,
         configPath,
-        lua: "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nreturn {}\n",
+        lua: "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n",
         rexBinDir: join(root, "rex-cli"),
       });
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(
@@ -142,7 +142,7 @@ it.live(
         const home = join(root, "home");
         const configPath = join(root, "init.lua");
         const lua =
-          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nreturn {}\n";
+          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n";
         yield* Effect.promise(() => writeFile(source, "source"));
         yield* Effect.promise(() =>
           writeFile(
@@ -172,6 +172,16 @@ it.live(
             }),
           )).message,
         ).toContain("exactly one Rex CLI directory placeholder");
+        for (const malformed of [
+          lua.replace("local installed_path_env = false\n", ""),
+          lua + "local installed_path_env = false\n",
+        ]) {
+          expect(
+            (yield* Effect.flip(installSetup({
+              source, home, configPath, lua: malformed, rexBinDir: join(root, "rex-cli"),
+            }))).message,
+          ).toContain("exactly one host PATH placeholder");
+        }
         expect(
           yield* Effect.promise(() => readFile(configPath, "utf8")),
         ).toContain("changed registration");
@@ -224,7 +234,7 @@ it.live("registers a stable package bin without copying or changing either versi
       const managedBin = join(root, "opt", "rex-worktrees");
       const original = '-- other Rex settings\nrex.action{ name = "custom" }\n';
       const manual = '-- BEGIN rex-worktrees\nrequire("rex-worktrees").setup()\n-- END rex-worktrees\n';
-      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nreturn {}\n";
+      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n";
       const rexBinDir = join(root, "rex-cli");
       yield* Effect.promise(() => mkdir(join(root, "Cellar", "0.1.0"), { recursive: true }));
       yield* Effect.promise(() => mkdir(join(root, "Cellar", "0.1.1"), { recursive: true }));

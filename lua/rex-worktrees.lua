@@ -1,6 +1,7 @@
 -- rex-worktrees: managed module
 local installed_rex_bin_dir = false
--- Additive Rex action; no key is bound unless setup({ key = ... }) requests one.
+local installed_path_env = false
+-- Opening is opt-in via opts.key.
 local M = {}
 
 function M.setup(opts)
@@ -18,6 +19,7 @@ function M.setup(opts)
   local function worktrees_request(request)
     local exec_opts = { stdin = request, timeout = 20, env = {} }
     if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
+    if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
     if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
     local result, run_err = rex.exec({ bin, "host-request" }, exec_opts)
     if not result then error(run_err, 0) end
@@ -43,7 +45,7 @@ function M.setup(opts)
   rex.action{
     name = "worktrees_open",
     title = "Open Worktree…",
-    description = "Choose an existing Rex machine and open its Git worktree in its Rex session",
+    description = "Choose a project, Rex machine, checkout, and exact session",
     run = function(ctx)
       local session_id = ctx.session_id or rex.session_id
       if type(session_id) ~= "string" then error("Select a Rex session first", 0) end
@@ -61,6 +63,7 @@ function M.setup(opts)
       end
       local exec_opts = { timeout = 20, env = {} }
       if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
+      if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
       if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
       local result, run_err = rex.exec(command, exec_opts)
       if not result then error(run_err, 0) end
@@ -76,6 +79,7 @@ function M.setup(opts)
       return layer
     end,
   }
+
 
   if opts.key then rex.bind(opts.key, "worktrees_open") end
 end

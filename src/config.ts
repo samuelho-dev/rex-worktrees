@@ -1,5 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { missing, notRepository, project, repository } from "./git.ts"
+import { repository, project } from "./repositories.ts"
+import { missing, notRepository } from "./git.ts"
 import { AppError, ConfigSchema, type ResolvedConfig } from "./contracts.ts"
 
 
@@ -38,7 +39,7 @@ export const resolveWorktreeRoot = Effect.fnUntraced(function*(repoPath: string)
       (error) => notRepository(error),
       () => Effect.succeed(undefined)
     )
-    if (candidate?.commonDir === target.commonDir) return entry.worktreeRoot
+    if (candidate?.vcs === target.vcs && candidate.commonDir === target.commonDir) return entry.worktreeRoot
   }
   const path = yield* Path.Path
   return config.worktreeRoot === undefined ? undefined : path.join(config.worktreeRoot, target.name)

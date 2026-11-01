@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -13,18 +14,26 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { resolveWorktreeRoot } from "../src/config.ts";
 import {
+  cloneRepository,
+  cloneSource,
   createWorktree,
-  discoverProjects,
   listBranches,
   listWorktrees,
+  origin,
   planWorktree,
   project,
+  remoteBranchHead,
+  remoteBranches,
   repository,
+  safeOrigin,
 } from "../src/git.ts";
-import type { Environment } from "../src/contracts.ts";
+import { discoverProjects } from "../src/repositories.ts";
+import { ServerHostIdSchema, SessionIdSchema, type GitClonePlan, type Environment } from "../src/contracts.ts";
+import { cloneDestination, prepareCloneCheckout } from "../src/worktrees.ts";
+import * as jj from "../src/jj.ts";
 
 const temporary: string[] = [];
 afterEach(() =>
@@ -304,6 +313,7 @@ it.live(
         const found = yield* discoverProjects([root], [created.path, repo]);
         expect(found).toEqual([
           {
+            vcs: "git",
             path: repo,
             name: "repo with space\nand newline",
             commonDir: join(repo, ".git"),
@@ -389,17 +399,20 @@ it.live(
       yield* Effect.promise(() => mkdir(nested));
       const checkout = yield* repository(nested);
       expect(checkout).toEqual({
+        vcs: "git",
         path: linked,
         name: "linked-checkout",
         commonDir: join(repo, ".git"),
       });
       expect(yield* project(nested)).toEqual({
         path: repo,
+        vcs: "git",
         name: "main project with spaces",
         commonDir: checkout.commonDir,
       });
       expect(yield* discoverProjects([root], [linked, repo], nested)).toEqual([
         {
+          vcs: "git",
           path: repo,
           name: "main project with spaces",
           commonDir: checkout.commonDir,
@@ -614,4 +627,195 @@ it.live(
       );
       expect(git(checkout, "branch", "--list", "metadata/new")).toBe("");
     }).pipe(Effect.provide(BunServices.layer)),
+);
+
+it.live("clone uses pushed history, keeps source checkout isolated, and resolves remote branches", () =>
+  Effect.gen(function* () {
+    const { root, repo: source } = yield* fixture();
+    const bare = join(root, "origin.git");
+    git(root, "init", "--bare", bare);
+    git(source, "remote", "add", "origin", bare);
+    git(source, "push", "-u", "origin", "main");
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(source, "branch", "published", "main");
+    git(source, "push", "origin", "published");
+    git(source, "branch", "unpublished", "main");
+    git(source, "branch", "origin/local-topic", "main");
+    git(source, "push", "origin", "main:refs/heads/origin/remote-topic");
+    yield* Effect.promise(() => writeFile(join(source, "tracked"), "staged\n"));
+    git(source, "add", "tracked");
+    yield* Effect.promise(() => writeFile(join(source, "tracked"), "dirty\n"));
+    const sourceStatus = git(source, "status", "--porcelain=v1", "-z");
+    const sourceHead = git(source, "rev-parse", "HEAD").trim();
+    const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("same-host");
+    const described = yield* cloneSource(source, hostId);
+    expect(described.branches).toEqual(expect.arrayContaining(["main", "published", "unpublished", "origin/local-topic", "origin/remote-topic"]));
+    expect(described.url).toBe(bare);
+    const destination = join(root, "destination");
+    yield* cloneRepository(described.url, destination);
+    expect((yield* repository(destination)).path).toBe(destination);
+    expect(yield* origin(destination, true)).toBe(bare);
+    expect(yield* remoteBranches(destination)).toContain("published");
+    expect(yield* remoteBranches(destination)).toContain("origin/remote-topic");
+    expect(yield* remoteBranches(destination)).not.toContain("origin/local-topic");
+    expect((yield* remoteBranchHead(destination, "origin/remote-topic")).trim()).toBe(sourceHead);
+    expect(yield* remoteBranches(destination)).not.toContain("unpublished");
+    expect((yield* remoteBranchHead(destination, "published")).trim()).toBe(sourceHead);
+    const published = yield* createWorktree(destination, "published", { startPoint: yield* remoteBranchHead(destination, "published"), worktreeName: "reviewed" });
+    expect(published.path).toBe(`${destination}.worktrees/reviewed`);
+    expect(git(published.path, "rev-parse", "HEAD").trim()).toBe(sourceHead);
+    expect(git(destination, "branch", "--list", "unpublished")).toBe("");
+    expect(git(source, "status", "--porcelain=v1", "-z")).toBe(sourceStatus);
+    expect(git(source, "rev-parse", "HEAD").trim()).toBe(sourceHead);
+    expect(yield* Effect.promise(() => readFile(join(source, "tracked"), "utf8"))).toBe("dirty\n");
+    expect(yield* Effect.promise(() => readFile(join(destination, "tracked"), "utf8"))).toBe("base\n");
+  }).pipe(Effect.provide(BunServices.layer))
+);
+
+it("rejects credential-bearing and cross-host local origin URLs without echoing rejected values", () => {
+  for (const secret of ["https://user:password@example.org/repo.git", "https://example.org/repo.git?token=secret", "ssh://user:password@example.org/repo", "ext::sh -c secret"]) {
+    expect(() => safeOrigin(secret, false)).toThrow("Unsafe origin URL");
+  }
+  expect(() => safeOrigin("/source/local.git", false)).toThrow("Local source origins require the same Rex host");
+  expect(safeOrigin("git@example.org:org/repo.git", false)).toBe("git@example.org:org/repo.git");
+});
+
+it.live("clone destination rejects bare and separate Git directories without touching their metadata", () =>
+  Effect.gen(function* () {
+    const { root, repo: source } = yield* fixture();
+    const bare = join(root, "bare.git");
+    git(root, "init", "--bare", bare);
+    const separate = join(root, "metadata");
+    git(root, "clone", `--separate-git-dir=${separate}`, source, join(root, "checkout"));
+    for (const metadata of [bare, separate]) {
+      const before = yield* Effect.promise(() => readFile(join(metadata, "HEAD")));
+      const error = yield* Effect.flip(cloneDestination(join(metadata, "nested"), source));
+      expect(error.message).toContain("Git metadata");
+      expect(yield* Effect.promise(() => readFile(join(metadata, "HEAD")))).toEqual(before);
+      yield* Effect.promise(() => expect(access(join(metadata, "nested"))).rejects.toThrow());
+    }
+  }).pipe(Effect.provide(BunServices.layer))
+);
+
+it("accepts credential-free SSH user and bracketed IPv6 locators", () => {
+  expect(safeOrigin("ssh://deploy@[2001:db8::1]/team/repo.git", false)).toBe("ssh://deploy@[2001:db8::1]/team/repo.git");
+  expect(safeOrigin("deploy@git.example.org:team/repo.git", false)).toBe("deploy@git.example.org:team/repo.git");
+  expect(safeOrigin("https://example.org/team/repo.git", false)).toBe("https://example.org/team/repo.git");
+});
+
+it.live("clone checkout task keeps pushed branches and rejects unpushed, colliding, and symlinked destinations", () =>
+  Effect.gen(function* () {
+    const { root, repo: source } = yield* fixture();
+    const bare = join(root, "origin.git");
+    git(root, "init", "--bare", bare);
+    git(source, "remote", "add", "origin", bare);
+    git(source, "push", "origin", "main");
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(source, "branch", "published");
+    git(source, "push", "origin", "published");
+    git(source, "branch", "unpushed");
+    const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
+    const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
+    const makePlan = (repo: string, branch: string, branchMode: GitClonePlan["input"]["branchMode"]): GitClonePlan => ({
+      vcs: "git", hostId, sessionId, repo, existing: false, label: "Clone & Open",
+      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main", "published", "unpushed"] }, repo, sessionId, name: "Task", branch, branchMode }
+    });
+    const repo = join(root, "cloned");
+    const prepared = yield* prepareCloneCheckout(makePlan(repo, "published", "existing"));
+    expect(prepared.repo.commonDir).toBe(join(repo, ".git"));
+    expect(git(prepared.cwd, "symbolic-ref", "--short", "HEAD").trim()).toBe("published");
+    expect(git(source, "branch", "--show-current").trim()).toBe("main");
+    const missing = join(root, "missing-branch");
+    expect((yield* Effect.flip(prepareCloneCheckout(makePlan(missing, "unpushed", "existing")))).message).toContain("not pushed");
+    expect((yield* repository(missing)).path).toBe(missing);
+    const collision = join(root, "collision");
+    yield* Effect.promise(() => mkdir(collision));
+    yield* Effect.promise(() => writeFile(join(collision, "keep"), "unchanged"));
+    yield* Effect.flip(prepareCloneCheckout(makePlan(collision, "published", "existing")));
+    expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
+    const link = join(root, "linked");
+    yield* Effect.promise(() => symlink(collision, link));
+    yield* Effect.flip(prepareCloneCheckout(makePlan(join(link, "nested"), "published", "existing")));
+    expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
+  }).pipe(Effect.provide(BunServices.layer))
+);
+
+it.live("existing clone checkout pins repository identity and default origin base", () =>
+  Effect.gen(function* () {
+    const { root, repo: source } = yield* fixture();
+    const bare = join(root, "origin.git");
+    git(root, "init", "--bare", bare);
+    git(source, "remote", "add", "origin", bare);
+    git(source, "push", "origin", "main");
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+    const repo = join(root, "existing");
+    git(root, "clone", bare, repo);
+    const original = yield* repository(repo);
+    const base = git(repo, "rev-parse", "refs/remotes/origin/HEAD").trim();
+    git(repo, "config", "user.name", "Rex Tests");
+    git(repo, "config", "user.email", "rex@example.test");
+    git(repo, "switch", "-c", "local-feature");
+    yield* Effect.promise(() => writeFile(join(repo, "tracked"), "feature-only\n"));
+    git(repo, "add", "tracked");
+    git(repo, "commit", "-m", "feature-only");
+    const feature = git(repo, "rev-parse", "HEAD").trim();
+    const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
+    const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
+    const plan: GitClonePlan = {
+      vcs: "git", hostId, sessionId, repo, existing: true, commonDir: original.commonDir, base, label: "Open existing repository",
+      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main"] }, repo, sessionId, name: "Task", branch: "new-from-default", branchMode: "create" }
+    };
+    const prepared = yield* prepareCloneCheckout(plan);
+    expect(git(prepared.cwd, "rev-parse", "HEAD").trim()).toBe(base);
+    expect(git(repo, "rev-parse", "HEAD").trim()).toBe(feature);
+    expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "main" } }))).message).toContain("already exists");
+    const displaced = join(root, "original");
+    yield* Effect.promise(() => rename(repo, displaced));
+    git(root, "clone", `--separate-git-dir=${join(root, "replacement-metadata")}`, bare, repo);
+    expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "replacement-test" } }))).message).toContain("identity changed");
+    expect(git(repo, "branch", "--list", "replacement-test")).toBe("");
+  }).pipe(Effect.provide(BunServices.layer))
+);
+
+it.live("JJ clone checkout creates a named workspace at a source-resolved published base", () =>
+  Effect.gen(function* () {
+    const { root, repo: source } = yield* fixture();
+    const bare = join(root, "origin.git");
+    git(root, "init", "--bare", bare);
+    git(source, "push", bare, "main");
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+    const previous = { JJ_CONFIG: process.env.JJ_CONFIG, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    try {
+      process.env.HOME = join(root, "jj-home");
+      process.env.XDG_CONFIG_HOME = join(root, "jj-config");
+      process.env.JJ_CONFIG = join(root, "jj-config.toml");
+      yield* Effect.promise(() => mkdir(process.env.HOME!));
+      yield* Effect.promise(() => writeFile(process.env.JJ_CONFIG!, '[user]\nname = "Rex Tests"\nemail = "rex@example.test"\n'));
+      const sourceRepo = join(root, "jj-source");
+      yield* jj.cloneRepository(bare, sourceRepo);
+      const revision = yield* jj.resolveRevision(sourceRepo, "@-");
+      const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
+      const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
+      const destination = join(root, "jj-target");
+      const plan = {
+        vcs: "jj" as const, hostId, sessionId, repo: destination, existing: false, label: "Clone & Open",
+        input: { vcs: "jj" as const, source: { vcs: "jj" as const, url: bare, sourceHostId: hostId,
+          revisions: [{ expression: revision.commitId, label: "base", revision }], revision },
+          repo: destination, sessionId, name: "Task", worktreeName: "fresh", revision: revision.commitId },
+        base: revision
+      };
+      const prepared = yield* prepareCloneCheckout(plan);
+      expect(prepared.repo.vcs).toBe("jj");
+      expect(prepared.cwd).toBe(`${destination}.worktrees/fresh`);
+      expect((yield* jj.resolveRevision(prepared.cwd, "@-")).commitId).toBe(revision.commitId);
+      expect((yield* jj.listWorkspaces(destination)).map(tree => tree.name)).toContain("fresh");
+      const repeated = yield* Effect.exit(prepareCloneCheckout(plan));
+      expect(repeated).toMatchObject({ _tag: "Failure" });
+    } finally {
+      for (const key of ["JJ_CONFIG", "HOME", "XDG_CONFIG_HOME"] as const) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  }).pipe(Effect.provide(BunServices.layer))
 );

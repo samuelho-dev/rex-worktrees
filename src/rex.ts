@@ -1,10 +1,11 @@
 import { hostname } from "node:os";
 import { Cause, Effect, Path, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexResizedSchema, RexTerminalSizeSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type PopupSize, type PopupSizer, type PopupBounds } from "./contracts.ts";
+import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexResizedSchema, RexTerminalSizeSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type PopupSize, type PopupSizer, type PopupBounds } from "./contracts.ts";
 import { run } from "./process.ts";
 const localName = hostname().toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
 export const localDirectoryUri = (raw: string): string | undefined => {
+  if (raw.startsWith("/")) return raw.includes("\0") ? undefined : raw;
   try {
     const url = new URL(raw);
     const authority = url.hostname.toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
@@ -97,8 +98,11 @@ export const originDirectory = Effect.fnUntraced(function*(sessionId: SessionId,
     layer.blocks?.some((block) => block.block_id === blockId && block.host_id === host.id)))) return undefined;
   const raw = yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "pwd"]);
   const result = yield* parse(RexDirectorySchema, raw);
-  if (!result.pwd) return undefined;
-  return localDirectoryUri(result.pwd);
+  if (result.pwd) return localDirectoryUri(result.pwd);
+  // ponytail: inspect only this verified pane's foreground when Rex has no reported directory.
+  const processInfo = yield* parse(RexProcessSchema, yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "process"]));
+  const cwd = processInfo.foreground?.cwd;
+  return cwd?.startsWith("/") && !cwd.includes("\0") ? cwd : undefined;
 });
 
 // ponytail: proportional feedback uses only the popup's OWN cell size; no source-pane or pixel-chrome guesses.
@@ -168,8 +172,12 @@ export const makePopupSizer = Effect.gen(function*() {
   return resize;
 });
 
+// Rex's macOS login wrapper resets PATH before starting a direct command.
+const commandWithPath = (command: readonly string[]) => process.env.PATH
+  ? ["/usr/bin/env", `PATH=${process.env.PATH}`, ...command] : command;
+
 export const createTab = Effect.fnUntraced(function*(sessionId: SessionId, name: string, cwd: string, command: readonly string[]) {
-  const result = yield* parse(RexCreatedSchema, yield* rex(["window", "new", "-s", sessionId, name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...command]));
+  const result = yield* parse(RexCreatedSchema, yield* rex(["window", "new", "-s", sessionId, name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...commandWithPath(command)]));
   const blockId = result.block_ids[0];
   if (!blockId) return yield* Effect.fail(new AppError({ message: "Rex created a tab without a terminal block" }));
   if (!result.window_id) return yield* Effect.fail(new AppError({ message: "Rex did not return a window ID" }));
@@ -177,7 +185,7 @@ export const createTab = Effect.fnUntraced(function*(sessionId: SessionId, name:
 });
 
 export const createSplit = Effect.fnUntraced(function*(sessionId: SessionId, windowId: WindowId, blockId: BlockId, name: string, cwd: string, command: readonly string[]) {
-  const result = yield* parse(RexCreatedSchema, yield* rex(["split", "-s", sessionId, "-b", blockId, "--split=right", "--label", name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...command]));
+  const result = yield* parse(RexCreatedSchema, yield* rex(["split", "-s", sessionId, "-b", blockId, "--split=right", "--label", name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...commandWithPath(command)]));
   const created = result.block_ids.find((id) => id !== blockId);
   if (!created) return yield* Effect.fail(new AppError({ message: "Rex created a split without a new terminal block" }));
   return { windowId: result.window_id ?? windowId, blockId: created };
@@ -219,7 +227,7 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
   const width = 0.68, height = 0.35; // ponytail: bootstrap only; the popup fits its own measured terminal after rendering
   const args = { session_id: sessionId, window_id: windowId,
     bounds: [(1 - width) / 2, (1 - height) / 2, width, height],
-    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: popupCommand, shell: "none", cwd: process.cwd(), exit: { on_completion: true } } } }, focus: true };
+    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), exit: { on_completion: true } } } }, focus: true };
   const created = yield* parse(RexLayerSchema, yield* localRex(["api", "call", "-s", sessionId, "session.new_layer", JSON.stringify(args)]));
   if (!created.layer_id || !created.block_ids?.some(Boolean)) return yield* Effect.fail(new AppError({ message: "Rex did not return a floating terminal layer" }));
   return created;

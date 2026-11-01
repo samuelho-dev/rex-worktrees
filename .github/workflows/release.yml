@@ -28,6 +28,14 @@ jobs:
             version="$(bun -p 'require("./package.json").version')"
             test "$GITHUB_REF_NAME" = "v$version"
           fi
+      - name: Install verified JJ 0.46.0
+        shell: bash
+        run: |
+          curl -fLsS -o "$RUNNER_TEMP/jj.tar.gz" https://github.com/jj-vcs/jj/releases/download/v0.46.0/jj-v0.46.0-aarch64-apple-darwin.tar.gz
+          printf '%s  %s\n' 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58 "$RUNNER_TEMP/jj.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/jj-bin"
+          tar -xzf "$RUNNER_TEMP/jj.tar.gz" -C "$RUNNER_TEMP/jj-bin" ./jj
+          echo "$RUNNER_TEMP/jj-bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run test
@@ -89,4 +97,4 @@ jobs:
           shasum -a 256 -c SHA256SUMS
           gh release create "$GITHUB_REF_NAME" rex-worktrees-*-macos-arm64.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes 'macOS ARM64 standalone executable, relinkable bundle, README, MIT license, and third-party notices in the archive. Matching Bun 1.3.13 runtime sources from v0.1.1: [Bun](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), [tinycc](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz); verify them against [v0.1.1 SHA256SUMS](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS). The SHA256SUMS in this release covers its application archive.'
+            --notes 'macOS ARM64 standalone executable, relinkable bundle, README, MIT license, and third-party notices in the archive. Native JJ 0.46 support, Start from mainline source/default snapshot semantics, and native source-cwd fallback fix. JJ integration requires the matching rex-worktrees 0.2.0 helper (protocol 3). Matching Bun 1.3.13 runtime sources from v0.1.1: [Bun](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), [tinycc](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz); verify them against [v0.1.1 SHA256SUMS](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS). The SHA256SUMS in this release covers its application archive.'

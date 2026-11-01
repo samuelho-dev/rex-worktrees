@@ -1,25 +1,29 @@
 import { isAbsolute, resolve } from "node:path"
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, Schema } from "effect"
-import { connectMachine, listMachines, review, submit } from "./client.ts"
-import { AppError, BlockIdSchema, ClientIdSchema, CliBooleanFlagSchema, CliStringFlagSchema, SessionIdSchema, TaskRequestSchema, type CliFlags, type LaunchInput, type PopupOrigin } from "./contracts.ts"
+import { connectMachine, inspectProject, listMachines, review, submit } from "./client.ts"
+import { AppError, BlockIdSchema, ClientIdSchema, CliBooleanFlagSchema, CliStringFlagSchema, CloneTaskRequestSchema, SessionIdSchema, TaskRequestSchema, type CliFlags, type LaunchInput, type PopupOrigin } from "./contracts.ts"
+import { repository } from "./repositories.ts"
 import { hostRequest } from "./host.ts"
 import { closeManagedPopup, openPopup, originDirectory } from "./rex.ts"
 import { setup } from "./setup.ts"
 import { popup } from "./ui.ts"
-import { task } from "./worktrees.ts"
+import { cloneTask, task } from "./worktrees.ts"
 // Replaced by `bun build --define`; undefined in source-mode Bun.
 declare const REX_WORKTREES_COMPILED: boolean
 const compiled = typeof REX_WORKTREES_COMPILED !== "undefined" && REX_WORKTREES_COMPILED
 
-const help = `rex-worktrees — Git worktrees on existing Rex machines
+const help = `rex-worktrees — Git worktrees and JJ workspaces on existing Rex machines
   setup [--bin /absolute/path/rex-worktrees] install Lua module; copy binary to ~/.local/bin unless --bin is set
   popup [--host HOST] [--context PATH | --no-context] [--origin-session ID [--origin-block ID]] [--origin-client ID]
                                          interactive terminal chooser
   launch-popup [--session ID] [--origin-block ID | --no-context] [--origin-client ID] [--host HOST]
                                          open a floating chooser in the source window
-  open --repo PATH --session ID --name NAME (--branch NAME | --worktree PATH)
-       [--worktree-name NAME (branch only)] [--host HOST] [--client ID] [--additional | --split]
+  open --repo PATH --session ID --name NAME (--branch NAME | --worktree PATH) [--worktree-name NAME]
+                                         Git: branch checkout or existing worktree
+  open --repo PATH --session ID --name NAME (--worktree PATH | --worktree-name NAME --revision EXPR)
+                                         JJ: existing workspace or new workspace at base revision
+       [--host HOST] [--client ID] [--additional | --split]
   host-request                            read a JSON request on stdin, write a JSON response
   help
 
@@ -98,11 +102,15 @@ const main = Effect.gen(function* () {
       ?? (sessionId === envSession && process.env.REX_CLIENT !== undefined ? yield* Schema.decodeUnknownEffect(ClientIdSchema)(process.env.REX_CLIENT) : undefined)
     const selected = flags["--host"]
     if (selected && !(yield* listMachines).some(machine => machine.key === selected || machine.label === selected || machine.selector === selected)) return yield* Effect.fail(new AppError({ message: `Rex host ${selected} is not registered` }))
-    // Palette context comes from the explicit origin pane; a direct CLI launch keeps its cwd.
+    // Resolve before creating the floating pane, while the source block is still available.
     const palette = typeof flags["--origin-block"] === "string"
     const command = [...executable, "popup", "--origin-session", sessionId]
-    if (palette && blockId) command.push("--origin-block", blockId)
-    else if (flags["--no-context"]) command.push("--no-context")
+    if (palette && blockId) {
+      const context = yield* originDirectory(sessionId, blockId)
+      command.push("--origin-block", blockId)
+      if (context) command.push("--context", context)
+      else command.push("--no-context")
+    } else if (flags["--no-context"]) command.push("--no-context")
     else command.push("--context", process.cwd())
     if (selected) command.push("--host", selected)
     yield* Console.log(JSON.stringify(yield* openPopup(command, sessionId, { blockId, clientId })))
@@ -115,29 +123,48 @@ const main = Effect.gen(function* () {
     const flags = yield* parseFlags(args)
     if (flags["--bin"] !== undefined) return yield* Effect.fail(new AppError({ message: "--bin is only supported by setup" }))
     if (!flags["--repo"] || !flags["--session"] || !flags["--name"]) return yield* Effect.fail(new AppError({ message: "open requires --repo PATH --session ID --name NAME" }))
-    if (Boolean(flags["--branch"]) === Boolean(flags["--worktree"])) return yield* Effect.fail(new AppError({ message: "Choose exactly one of --branch NAME or --worktree PATH" }))
-    if (flags["--worktree-name"] !== undefined && flags["--worktree"] !== undefined) return yield* Effect.fail(new AppError({ message: "--worktree-name requires --branch, not --worktree" }))
     if (flags["--additional"] && flags["--split"]) return yield* Effect.fail(new AppError({ message: "--additional and --split are mutually exclusive" }))
-    const input: LaunchInput = {
-      repo: flags["--repo"], sessionId: flags["--session"], name: flags["--name"],
-      branch: flags["--branch"], worktreeName: flags["--worktree-name"], path: flags["--worktree"], clientId: flags["--client"],
-      additional: flags["--additional"], split: flags["--split"]
-    }
-    if (!input.repo.trim() || !input.name.trim() || !input.sessionId.trim()) return yield* Effect.fail(new AppError({ message: "Required values cannot be blank" }))
     const selected = flags["--host"]
     const machine = (yield* listMachines).find(machine => !selected ? machine.local : machine.key === selected || machine.label === selected || machine.selector === selected)
     if (!machine) return yield* Effect.fail(new AppError({ message: `Rex host ${selected} is not registered` }))
     const host = yield* connectMachine(machine)
-    if (!host.local && (!isAbsolute(input.repo) || (input.path && !isAbsolute(input.path)))) return yield* Effect.fail(new AppError({ message: "Remote repository and worktree paths must be absolute on the destination machine" }))
-    const launchInput = { ...input, repo: host.local ? resolve(input.repo) : input.repo, path: input.path && (host.local ? resolve(input.path) : input.path) }
-    const reviewed = yield* review(host, executable, launchInput)
-    yield* Console.log(JSON.stringify(yield* submit(host, executable, launchInput, reviewed), null, 2))
+    if (!host.local && (!isAbsolute(flags["--repo"]) || (flags["--worktree"] && !isAbsolute(flags["--worktree"]))))
+      return yield* Effect.fail(new AppError({ message: "Remote repository and worktree paths must be absolute on the destination machine" }))
+    const repoPath = host.local ? resolve(flags["--repo"]) : flags["--repo"]
+    const vcs = host.local ? (yield* repository(repoPath)).vcs : (yield* inspectProject(host, executable, repoPath)).checkout.vcs
+    let input: LaunchInput
+    if (vcs === "git") {
+      if (flags["--revision"] || Boolean(flags["--branch"]) === Boolean(flags["--worktree"]))
+        return yield* Effect.fail(new AppError({ message: "Git requires exactly one of --branch NAME or --worktree PATH; --revision is JJ-only" }))
+      if (flags["--worktree-name"] !== undefined && flags["--worktree"] !== undefined)
+        return yield* Effect.fail(new AppError({ message: "--worktree-name requires --branch, not --worktree" }))
+      input = { vcs, repo: repoPath, sessionId: flags["--session"], name: flags["--name"],
+        branch: flags["--branch"], worktreeName: flags["--worktree-name"],
+        path: flags["--worktree"] && (host.local ? resolve(flags["--worktree"]) : flags["--worktree"]),
+        clientId: flags["--client"], additional: flags["--additional"], split: flags["--split"] }
+    } else {
+      if (flags["--branch"] || Boolean(flags["--worktree"]) === Boolean(flags["--worktree-name"]) ||
+          (flags["--worktree"] && flags["--revision"]) || (flags["--worktree-name"] && !flags["--revision"]))
+        return yield* Effect.fail(new AppError({ message: "JJ requires --worktree PATH or --worktree-name NAME with --revision EXPR; --branch is Git-only" }))
+      input = { vcs, repo: repoPath, sessionId: flags["--session"], name: flags["--name"],
+        worktreeName: flags["--worktree-name"], revision: flags["--revision"],
+        path: flags["--worktree"] && (host.local ? resolve(flags["--worktree"]) : flags["--worktree"]),
+        clientId: flags["--client"], additional: flags["--additional"], split: flags["--split"] }
+    }
+    const reviewed = yield* review(host, executable, input)
+    yield* Console.log(JSON.stringify(yield* submit(host, executable, input, reviewed), null, 2))
     return
   }
   if (verb === "task") {
     if (args.length !== 1) return yield* Effect.fail(new AppError({ message: "task requires one JSON argument" }))
     const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TaskRequestSchema))(args[0])
     yield* task(request)
+    return
+  }
+  if (verb === "clone-task") {
+    if (args.length !== 1) return yield* Effect.fail(new AppError({ message: "clone-task requires one JSON argument" }))
+    const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CloneTaskRequestSchema))(args[0])
+    yield* cloneTask(request)
     return
   }
   if (verb === "host-request") {

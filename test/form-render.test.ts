@@ -11,24 +11,14 @@ import {
 
 const view: FormView = {
   rows: [
-    {
-      id: "project",
-      label: "Project",
-      value: "atelier",
-      detail: "/Users/sample/projects/atelier",
-    },
+    { id: "project", label: "Project", value: "atelier" },
     {
       id: "machine",
       label: "Machine",
       value: "Homelab",
       detail: "Host ID: host-remote",
     },
-    {
-      id: "destination",
-      label: "Worktree",
-      value: "feature",
-      detail: "/Users/sample/projects/atelier.worktrees/feature",
-    },
+    { id: "destination", label: "Worktree", value: "feature" },
     { id: "branch", label: "Branch", value: "feature" },
     { id: "session", label: "Session", value: "session-123" },
     { id: "mode", label: "Mode", value: "Auto" },
@@ -71,7 +61,7 @@ describe("persistent form frame", () => {
     expect(expanded.at(-1)).toContain("┘");
   });
 
-  it("keeps initial and populated normal forms aligned, but grows for editors and long paths", () => {
+  it("keeps initial and populated normal forms aligned, but grows for editors and long focused detail", () => {
     const initial: FormView = {
       ...view,
       rows: view.rows.map(row => ({
@@ -86,11 +76,11 @@ describe("persistent form frame", () => {
     expect(main).toBe(16);
     expect(popupTargetRows(view, 96, true)).toBe(22);
     expect(popupTargetRows(initial, 96)).toBe(main);
-    const path = `/Users/sample/${"projects/".repeat(220)}final`;
-    const expanded = { ...view, rows: view.rows.map(row => row.id === "destination" ? { ...row, detail: path } : row) };
+    const detail = `Host ID: ${"remote-machine/".repeat(220)}final`;
+    const expanded = { ...view, rows: view.rows.map(row => row.id === "machine" ? { ...row, detail } : row) };
     const rows = popupTargetRows(expanded, 96);
     expect(rows).toBeGreaterThan(main);
-    expect(renderFormFrame(expanded, "destination", false, 96, rows, false)).toContain("final");
+    expect(renderFormFrame(expanded, "machine", false, 96, rows, false)).toContain("final");
   });
 
   it("keeps validation visible in a compact editor", () => {
@@ -187,25 +177,6 @@ describe("persistent form frame", () => {
     ).toBe(true);
   });
 
-  it("long destination paths with spaces wrap beneath Worktree even when Submit is focused", () => {
-    const path =
-      "/Users/sample/Library/Application Support/Rex Worktrees/fixtures/feature draft";
-    const frame = renderFormFrame(
-      {
-        ...view,
-        rows: view.rows.map(row => row.id === "destination" ? { ...row, detail: path } : row),
-      },
-      "submit",
-      false,
-      60,
-      18,
-      false,
-    );
-    expect(frame).toContain("/Users/sample/Library");
-    expect(frame).toContain("feature draft");
-    expect(frame.indexOf("feature draft")).toBeLessThan(frame.indexOf("Create worktree"));
-    expect(frame.trimEnd().split("\r\n").length).toBeLessThanOrEqual(18);
-  });
 
   it("keeps plan detail and warning visible without a metadata footer", () => {
     const detail = "Reuse matching tab";
@@ -216,10 +187,13 @@ describe("persistent form frame", () => {
     expect(frame).toContain(warning);
   });
 
-  it("resize widens detail without painting beyond the window", () => {
-    const narrow = renderFormFrame(view, "project", false, 60, 18, false);
-    const wide = renderFormFrame(view, "project", false, 100, 30, false);
-    expect(wide).toContain("/Users/sample/projects/atelier");
+  it("resize widens focused detail without painting beyond the window", () => {
+    const detail = "Host ID: remote-machine-with-a-long-identifier-used-for-this-frame";
+    const expanded = { ...view, rows: view.rows.map(row => row.id === "machine" ? { ...row, detail } : row) };
+    const narrow = renderFormFrame(expanded, "machine", false, 60, 18, false);
+    const wide = renderFormFrame(expanded, "machine", false, 100, 30, false);
+    expect(wide).toContain(detail);
+    expect(narrow).not.toContain(detail);
     expect(narrow.split("\r\n").length).toBeLessThanOrEqual(18);
     expect(
       wide.split("\r\n").every((line) => Bun.stringWidth(line) <= 100),
@@ -240,22 +214,23 @@ describe("persistent form frame", () => {
     expect(editor).not.toContain("\u202e");
   });
 
-  it("untrusted Rex labels and paths cannot inject terminal controls", () => {
+  it("untrusted Rex labels and details cannot inject terminal controls", () => {
     const malicious: FormView = {
       ...view,
       rows: view.rows.map((row) =>
         row.id === "project"
           ? { ...row, value: "\x1b[2J\x1b]0;hijack\x07\u202eVISIBLE\nNEXT" }
-          : row.id === "destination"
-          ? { ...row, detail: "path\x1b[31m\rnext" }
+          : row.id === "machine"
+          ? { ...row, detail: "host\x1b[31m\rnext" }
           : row,
       ),
     };
-    const frame = renderFormFrame(malicious, "project", false, 60, 18, false);
+    const frame = renderFormFrame(malicious, "machine", false, 60, 18, false);
     expect(frame).not.toContain("\x1b");
     expect(frame).not.toContain("\x07");
     expect(frame).not.toContain("\u202e");
     expect(frame).toContain("NEXT");
+    expect(frame).toContain("host next");
   });
 
   it("NO_COLOR frames have no style sequences", () => {
@@ -418,4 +393,73 @@ describe("inline choice editor", () => {
       ),
     ).toEqual({ _tag: "Submit", value: null });
   });
+});
+
+it("Ctrl+S commits valid editor content but neither incomplete exact input nor cancel submits", () => {
+  const choices = [{ value: "session:one", title: "One" }];
+  const key = (name: string, ctrl = false) => ({
+    key: { name, ctrl, shift: false, meta: false },
+    input: Option.some(""),
+  });
+  expect(advanceInputChoice({ text: "", selected: 0 }, key("s", true), choices, true))
+    .toEqual({ _tag: "Submit", value: { kind: "selected", value: "session:one" } });
+  expect(advanceInputChoice({ text: "missing", selected: null }, key("s", true), choices, true))
+    .toEqual({ _tag: "Beep" });
+  expect(advanceInputChoice({ text: "/target/alpha", selected: null }, key("s", true), choices))
+    .toEqual({ _tag: "Submit", value: { kind: "typed", text: "/target/alpha" } });
+  expect(advanceInputChoice({ text: "missing", selected: null }, key("escape"), choices))
+    .toEqual({ _tag: "Submit", value: null });
+});
+
+it("shows clone consent and reviewed source and target within the six-field form", () => {
+  const cloneView: FormView = {
+    ...view,
+    rows: view.rows.map(row => row.id === "destination"
+      ? { ...row, value: "/target/custom-repo" } : row),
+    submitLabel: "Clone & Open",
+    notice: "https://example.com/source.git → /target/custom-repo · only pushed history transfers",
+  };
+  const frame = renderFormFrame(cloneView, "submit", false, 96, 24, false);
+  expect(cloneView.rows).toHaveLength(6);
+  expect(frame).toContain("Clone & Open");
+  expect(frame).toContain("https://example.com/source.git");
+  expect(frame).toContain("/target/custom-repo");
+});
+
+it("JJ workspace/start-from remain distinct compact fields while the reviewed snapshot warning is visible", () => {
+  const jjView: FormView = {
+    ...view,
+    rows: view.rows.map(row => row.id === "destination" ? { ...row, label: "Workspace", value: "topic" }
+      : row.id === "branch" ? { ...row, label: "Start from", value: "main@origin" } : row),
+    notice: "JJ_SOURCE_SNAPSHOT_WARNING",
+  };
+  const frame = renderFormFrame(jjView, "submit", false, 96, 24, false);
+  expect(jjView.rows.map(row => row.id)).toEqual(view.rows.map(row => row.id));
+  expect(frame).toContain("WORKSPACE");
+  expect(frame).toContain("START FROM");
+  expect(frame).toContain("main@origin");
+  expect(frame).toContain(jjView.notice);
+});
+
+it("JJ revision editor requires a selected candidate or nonempty typed expression before Ctrl+S", () => {
+  const key = { key: { name: "s", ctrl: true, shift: false, meta: false }, input: Option.some("") };
+  const choices = [{ value: { expression: "@-", commitId: "a".repeat(40) }, title: "@-" }];
+  expect(advanceInputChoice({ text: "", selected: null }, key, choices)).toEqual({ _tag: "Beep" });
+  expect(advanceInputChoice({ text: "", selected: 0 }, key, choices)).toEqual({
+    _tag: "Submit", value: { kind: "selected", value: choices[0]?.value }
+  });
+  expect(advanceInputChoice({ text: "main@origin", selected: null }, key, choices)).toEqual({
+    _tag: "Submit", value: { kind: "typed", text: "main@origin" }
+  });
+});
+
+it("repository-provided JJ revision labels cannot inject terminal controls or new rows", () => {
+  const unsafe = "main\u001b]2;hijack\u0007\nnext\u001b[31m";
+  const editor = renderInputChoice("Start from", { text: "", selected: 0 },
+    [{ value: "a".repeat(40), title: unsafe, description: "commit\u001b[2J\nsecond" }],
+    60, 18, false);
+  expect(editor).not.toContain("\u001b");
+  expect(editor).not.toContain("\u0007");
+  expect(editor.split("\r\n")).toHaveLength(4);
+  expect(editor.split("\r\n").every(line => Bun.stringWidth(line) <= 60)).toBe(true);
 });

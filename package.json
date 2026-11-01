@@ -1,6 +1,7 @@
 {
   "name": "rex-worktrees",
-  "version": "0.1.2",
+  "version": "0.2.0",
+  "description": "Git worktrees and Jujutsu workspaces for Rex",
   "license": "MIT",
   "author": "Samuel Ho",
   "repository": { "type": "git", "url": "git+https://github.com/samuelho-dev/rex-worktrees.git" },

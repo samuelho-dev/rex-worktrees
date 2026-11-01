@@ -8,17 +8,24 @@ const manualRegistration = '-- BEGIN rex-worktrees\nrequire("rex-worktrees").set
 const managedRegistration = /^-- BEGIN rex-worktrees\nrequire\("rex-worktrees"\)\.setup\(\{ bin = "(?:\\.|[^"\\])*" \}\)\n-- END rex-worktrees\n$/
 const marker = "-- rex-worktrees: managed module\n"
 const rexBinPlaceholder = "local installed_rex_bin_dir = false"
+const pathEnvPlaceholder = "local installed_path_env = false"
+const luaLiteral = (value: string) => JSON.stringify(value).replace(/\\u00([0-1][0-9a-f])/gi,
+  (_, hex: string) => `\\${parseInt(hex, 16).toString().padStart(3, "0")}`)
 const fail = (message: string) => Effect.fail(new AppError({ message }))
 
 
 // The injectable paths and payload let the filesystem regression test avoid Rex and the user's home.
-export const installSetup = Effect.fnUntraced(function* ({ source, home, configPath, lua: module, rexBinDir, managedBin }: Install) {
+export const installSetup = Effect.fnUntraced(function* ({ source, home, configPath, lua: module, rexBinDir, managedBin, pathEnv }: Install) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   if (!path.isAbsolute(configPath) || !path.isAbsolute(home) || !path.isAbsolute(source) || !path.isAbsolute(rexBinDir) || (managedBin !== undefined && !path.isAbsolute(managedBin))) return yield* new AppError({ message: "Setup requires absolute paths" })
   if (!module.startsWith(marker)) return yield* new AppError({ message: "Embedded Lua module is missing its install marker" })
-  if (!module.startsWith(`${marker}${rexBinPlaceholder}\n`) || module.split(rexBinPlaceholder).length !== 2) return yield* new AppError({ message: "Embedded Lua module must contain exactly one Rex CLI directory placeholder after its marker" })
-  const installedLua = module.replace(rexBinPlaceholder, `local installed_rex_bin_dir = ${JSON.stringify(rexBinDir).replace(/\\u00([0-1][0-9a-f])/gi, (_, hex: string) => `\\${parseInt(hex, 16).toString().padStart(3, "0")}`)}`)
+  if (!module.startsWith(`${marker}${rexBinPlaceholder}\n`) || module.split(rexBinPlaceholder).length !== 2)
+    return yield* new AppError({ message: "Embedded Lua module must contain exactly one Rex CLI directory placeholder after its marker" })
+  if (!module.startsWith(`${marker}${rexBinPlaceholder}\n${pathEnvPlaceholder}\n`) || module.split(pathEnvPlaceholder).length !== 2)
+    return yield* new AppError({ message: "Embedded Lua module must contain exactly one host PATH placeholder after its Rex CLI directory placeholder" })
+  const installedLua = module.replace(rexBinPlaceholder, `local installed_rex_bin_dir = ${luaLiteral(rexBinDir)}`)
+    .replace(pathEnvPlaceholder, `local installed_path_env = ${pathEnv === undefined ? "false" : luaLiteral(pathEnv)}`)
   const bin = managedBin ?? path.join(home, ".local", "bin", "rex-worktrees")
   // ponytail: preserve the stable package path in Rex; resolve it only to verify the running binary.
   const registration = managedBin === undefined ? manualRegistration : `-- BEGIN rex-worktrees\nrequire("rex-worktrees").setup({ bin = ${JSON.stringify(managedBin)} })\n-- END rex-worktrees\n`
@@ -101,5 +108,5 @@ export const setup = Effect.fnUntraced(function* (managedBin?: string) {
   const response = yield* rex(["config", "check", "--json"])
   const checked = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RexConfigCheckSchema))(response)
   if (checked.diagnostics.length) return yield* fail("Rex config has diagnostics; fix it before setup")
-  return yield* installSetup({ source: process.execPath, home, configPath: checked.path, lua, rexBinDir, managedBin })
+  return yield* installSetup({ source: process.execPath, home, configPath: checked.path, lua, rexBinDir, managedBin, ...(process.env.PATH !== undefined ? { pathEnv: process.env.PATH } : {}) })
 })
