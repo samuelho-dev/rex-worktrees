@@ -14,7 +14,8 @@ declare const REX_WORKTREES_COMPILED: boolean
 const compiled = typeof REX_WORKTREES_COMPILED !== "undefined" && REX_WORKTREES_COMPILED
 
 const help = `rex-worktrees — Git worktrees and JJ workspaces on existing Rex machines
-  setup [--bin /absolute/path/rex-worktrees] install Lua module; copy binary to ~/.local/bin unless --bin is set
+  setup [--bin /absolute/path/rex-worktrees] [--config /absolute/path/init.lua]
+                                         install Lua module; copy binary to ~/.local/bin unless --bin is set
   popup [--host HOST] [--context PATH | --no-context] [--origin-session ID [--origin-block ID]] [--origin-client ID]
                                          interactive terminal chooser
   launch-popup [--session ID] [--origin-block ID | --no-context] [--origin-client ID] [--host HOST]
@@ -57,10 +58,10 @@ const main = Effect.gen(function* () {
   if (verb === "help" || verb === "--help" || verb === "-h") { yield* Console.log(help); return }
   if (verb === "setup") {
     const flags = yield* parseFlags(args)
-    if (Object.keys(flags).some(key => key !== "--bin")) return yield* Effect.fail(new AppError({ message: "Invalid setup flags" }))
+    if (Object.keys(flags).some(key => key !== "--bin" && key !== "--config") || (flags["--config"] && !flags["--bin"])) return yield* Effect.fail(new AppError({ message: "Invalid setup flags: --config requires --bin" }))
     if (!compiled) return yield* Effect.fail(new AppError({ message: "Build first with bun run build, then run ./dist/rex-worktrees setup" }))
-    const installed = yield* setup(flags["--bin"])
-    yield* Console.log(`${flags["--bin"] ? "Registered binary" : "Installed binary"}: ${installed.bin}\nInstalled Lua module: ${installed.luaPath}\nUpdated Rex config: ${installed.configPath}\nRun rex config reload to activate.`)
+    const installed = yield* setup(flags["--bin"], flags["--config"])
+    yield* Console.log(`${flags["--bin"] ? "Registered binary" : "Installed binary"}: ${installed.bin}\nInstalled Lua module: ${installed.luaPath}\nUpdated Rex config: ${installed.configPath}${flags["--config"] ? "\nRex will load the registration when it next starts." : "\nRun rex config reload to activate."}`)
     return
   }
   if (verb === "popup") {

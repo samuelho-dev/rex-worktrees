@@ -39,6 +39,12 @@ it.live(
         yield* Effect.promise(() => chmod(source, 0o755));
         yield* Effect.promise(() => writeFile(initTarget, original));
         yield* Effect.promise(() => symlink(initTarget, configPath));
+        expect(
+          (yield* Effect.flip(
+            installSetup({ source, home, configPath, lua, rexBinDir, allowLinkedConfig: false }),
+          )).message,
+        ).toContain("Refusing linked Rex init");
+        expect(yield* Effect.promise(() => readFile(initTarget, "utf8"))).toBe(original);
         const paths = yield* installSetup({
           source,
           home,

@@ -86,7 +86,7 @@ export const ResolvedConfigSchema = Schema.Struct({
   projectRoots: Schema.Array(Schema.Struct({ path: Schema.String, worktreeRoot: Schema.String }))
 })
 export type ResolvedConfig = typeof ResolvedConfigSchema.Type
-export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String) })
+export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String), allowLinkedConfig: Schema.optional(Schema.Boolean) })
 export type Install = typeof InstallSchema.Type
 export const AssociationSchema = Schema.Struct({
   vcs: VcsSchema, hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
@@ -284,11 +284,11 @@ export const RexHelperArgsSchema = Schema.Struct({ properties: Schema.Struct({ r
 export const RexConfigCheckSchema = Schema.Struct({ path: Schema.String, exists: Schema.Boolean, diagnostics: Schema.Array(Schema.Unknown) })
 
 export const CliBooleanFlagSchema = Schema.Literals(["--additional", "--split", "--no-context", "--managed-popup"])
-export const CliStringFlagSchema = Schema.Literals(["--bin", "--host", "--repo", "--session", "--name", "--branch", "--revision", "--worktree", "--worktree-name", "--client", "--context", "--origin-session", "--origin-block", "--origin-client"])
+export const CliStringFlagSchema = Schema.Literals(["--bin", "--config", "--host", "--repo", "--session", "--name", "--branch", "--revision", "--worktree", "--worktree-name", "--client", "--context", "--origin-session", "--origin-block", "--origin-client"])
 export const CliFlagsSchema = Schema.Struct({
   "--additional": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--split": Schema.mutableKey(Schema.optional(Schema.Boolean)),
   "--no-context": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--managed-popup": Schema.mutableKey(Schema.optional(Schema.Boolean)),
-  "--bin": Schema.mutableKey(Schema.optional(Schema.String)), "--host": Schema.mutableKey(Schema.optional(Schema.String)), "--repo": Schema.mutableKey(Schema.optional(Schema.String)),
+  "--bin": Schema.mutableKey(Schema.optional(Schema.String)), "--config": Schema.mutableKey(Schema.optional(Schema.String)), "--host": Schema.mutableKey(Schema.optional(Schema.String)), "--repo": Schema.mutableKey(Schema.optional(Schema.String)),
   "--session": Schema.mutableKey(Schema.optional(SessionIdSchema)), "--name": Schema.mutableKey(Schema.optional(Schema.String)),
   "--branch": Schema.mutableKey(Schema.optional(Schema.String)), "--worktree": Schema.mutableKey(Schema.optional(Schema.String)),
   "--revision": Schema.mutableKey(Schema.optional(Schema.String)),

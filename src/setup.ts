@@ -15,7 +15,7 @@ const fail = (message: string) => Effect.fail(new AppError({ message }))
 
 
 // The injectable paths and payload let the filesystem regression test avoid Rex and the user's home.
-export const installSetup = Effect.fnUntraced(function* ({ source, home, configPath, lua: module, rexBinDir, managedBin, pathEnv }: Install) {
+export const installSetup = Effect.fnUntraced(function* ({ source, home, configPath, lua: module, rexBinDir, managedBin, pathEnv, allowLinkedConfig = true }: Install) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   if (!path.isAbsolute(configPath) || !path.isAbsolute(home) || !path.isAbsolute(source) || !path.isAbsolute(rexBinDir) || (managedBin !== undefined && !path.isAbsolute(managedBin))) return yield* new AppError({ message: "Setup requires absolute paths" })
@@ -42,6 +42,7 @@ export const installSetup = Effect.fnUntraced(function* ({ source, home, configP
   if (luaInfo && !(yield* fs.readFileString(luaPath)).startsWith(marker)) return yield* fail(`Refusing to replace unrelated Lua module: ${luaPath}`)
   const initInfo = yield* info(configPath)
   if (initInfo && initInfo.type !== "File" && initInfo.type !== "SymbolicLink") return yield* fail(`Rex init is not a file: ${configPath}`)
+  if (initInfo?.type === "SymbolicLink" && !allowLinkedConfig) return yield* fail(`Refusing linked Rex init: ${configPath}`)
   const current = initInfo ? yield* fs.readFileString(configPath) : ""
   const begin = "-- BEGIN rex-worktrees"
   const end = "-- END rex-worktrees"
@@ -81,11 +82,12 @@ export const installSetup = Effect.fnUntraced(function* ({ source, home, configP
   return { bin, luaPath, configPath }
 })
 
-export const setup = Effect.fnUntraced(function* (managedBin?: string) {
+export const setup = Effect.fnUntraced(function* (managedBin?: string, configPath?: string) {
   const home = process.env.HOME
   if (!home) return yield* fail("HOME is required")
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  if (configPath !== undefined && !path.isAbsolute(configPath)) return yield* fail(`--config must be an absolute path: ${configPath}`)
   const executable = (dir: string) => Effect.catchIf(
     fs.stat(path.join(dir, "rex")).pipe(Effect.map(info => info.type === "File" && (info.mode & 0o111) !== 0)),
     (error) => PlatformError.isPlatformError(error) && error.reason._tag === "NotFound",
@@ -105,8 +107,13 @@ export const setup = Effect.fnUntraced(function* (managedBin?: string) {
     }
   }
   if (!rexBinDir) return yield* fail("Rex CLI not found: set REX_BIN_DIR or add an executable rex to PATH")
-  const response = yield* rex(["config", "check", "--json"])
-  const checked = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RexConfigCheckSchema))(response)
-  if (checked.diagnostics.length) return yield* fail("Rex config has diagnostics; fix it before setup")
-  return yield* installSetup({ source: process.execPath, home, configPath: checked.path, lua, rexBinDir, managedBin, ...(process.env.PATH !== undefined ? { pathEnv: process.env.PATH } : {}) })
+  // ponytail: an explicit config installs into a stopped Rex instance without asking its server to start.
+  let target = configPath
+  if (target === undefined) {
+    const response = yield* rex(["config", "check", "--json"])
+    const checked = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RexConfigCheckSchema))(response)
+    if (checked.diagnostics.length) return yield* fail("Rex config has diagnostics; fix it before setup")
+    target = checked.path
+  }
+  return yield* installSetup({ source: process.execPath, home, configPath: target, lua, rexBinDir, managedBin, allowLinkedConfig: configPath === undefined, ...(process.env.PATH !== undefined ? { pathEnv: process.env.PATH } : {}) })
 })
