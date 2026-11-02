@@ -368,11 +368,9 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (Result.isFailure(found)) error = problem(found.failure)
         else { machines = found.success; error = undefined }
       })
-      const clonePath = (choice: ProjectChoice) => {
-        if (!choice.name || choice.name === "." || choice.name === ".." || /[/\\\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(choice.name))
-          throw new AppError({ message: "Project name must be one safe directory name; enter an absolute project path instead" })
-        return `${cloneRoot.replace(/\/$/, "")}/${choice.name}`
-      }
+      const clonePath = (choice: ProjectChoice) =>
+        choice.name && choice.name !== "." && choice.name !== ".." && !/[/\\\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(choice.name)
+          ? `${cloneRoot.replace(/\/$/, "")}/${choice.name}` : undefined
       const known = (host: DestinationHost, repository: Repository, checkout?: Repository): ProjectChoice => ({
         name: repository.name, source: {
           machineKey: host.key, hostId: host.hostId, repository,
@@ -397,22 +395,32 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         }
       })
       const cloneDestination = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost) {
-        yield* proposeClone(choice, host, clonePath(choice))
+        let repo = clonePath(choice)
+        if (!repo) {
+          const picked = yield* inputChoice<string>({
+            message: "Project name is not a safe clone directory; type an absolute clone destination",
+            choices: []
+          })
+          repo = picked.kind === "selected" ? picked.value : picked.text.trim()
+        }
+        if (!repo.startsWith("/")) return yield* Effect.fail(new AppError({ message: "Clone destination must be an absolute path on this machine" }))
+        yield* proposeClone(choice, host, repo)
       })
       const bindProject = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost, available: readonly Repository[]) {
         const source = choice.source
         let path = source?.machineKey === host.key && source.hostId === host.hostId
           ? source.checkoutPath ?? source.repository.path : undefined
         if (!path && choice.path?.startsWith("/")) path = choice.path
+        if (!path && source) {
+          yield* cloneDestination(choice, host)
+          return undefined
+        }
         if (!path) {
-          if (source) path = clonePath(choice)
-          else {
-            const directory = yield* inputChoice({
-              message: `Project directory on ${host.label} (existing checkout; absolute path)`,
-              choices: available.map(repo => ({ value: repo.path, title: repo.name, description: repo.path }))
-            })
-            path = directory.kind === "selected" ? directory.value : directory.text.trim()
-          }
+          const directory = yield* inputChoice({
+            message: `Project directory on ${host.label} (existing checkout; absolute path)`,
+            choices: available.map(repo => ({ value: repo.path, title: repo.name, description: repo.path }))
+          })
+          path = directory.kind === "selected" ? directory.value : directory.text.trim()
         }
         if (!path.startsWith("/")) return yield* Effect.fail(new AppError({ message: "Project directory must be an absolute path on this machine" }))
         const inspected = yield* Effect.result(inspectProject(host, command, path))
@@ -526,7 +534,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         return {
           rows: rows.filter(row => !(row.id === "branch" && draft.project?.vcs === "jj" && !draft.clone && !!draft.destination?.path))
             .map(row => ({ ...row, disabled: initializing || row.disabled })),
-          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Clone & Open" : "Open worktree"),
+          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Review clone" : "Review worktree"),
           submitDisabled: initializing || !draft.host || !(cloneInputFor(draft) || inputFor(draft)),
           notice: [draft.clone ? `Destination: ${draft.clone.repo} · Only pushed history transfers` : undefined,
           clonePlan || plan ? "Review this action; submit again to launch" : undefined,
@@ -625,6 +633,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           return
         }
         if (view.rows.find(row => row.id === action)?.disabled) continue
+        error = undefined
         const editing = yield* Effect.result(Effect.gen(function*() {
           if (action === "machine") {
             yield* loadMachines
@@ -713,7 +722,9 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
                   })),
                   ...(draft.projectChoice?.source ? [{
                     value: "clone" as const, title: "Clone this project…",
-                    description: `Propose ${clonePath(draft.projectChoice)} · only pushed history transfers`
+                    description: clonePath(draft.projectChoice)
+                      ? `Propose ${clonePath(draft.projectChoice)} · only pushed history transfers`
+                      : "Choose an absolute clone destination · only pushed history transfers"
                   }] : [])
                 ]
               })
@@ -824,7 +835,6 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (Result.isFailure(editing)) {
           if (!Terminal.isQuitError(editing.failure)) error = problem(editing.failure)
         } else {
-          error = undefined
           plan = undefined
           clonePlan = undefined
         }

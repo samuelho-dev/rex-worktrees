@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit",
+  kind: "pending" | "failure" | "edit" | "collision" | "unsafe" | "connect",
   run: (pty: {
     output: () => string;
     waitForText: (text: string) => Promise<void>;
@@ -64,27 +64,41 @@ async function withPopup(
     import * as Effect from ${JSON.stringify(effect)};
     import * as BunRuntime from ${JSON.stringify(runtime)};
     import * as BunServices from ${JSON.stringify(services)};
-    import { mock } from "bun:test";
-    ${kind === "edit" ? `
+    ${kind !== "pending" && kind !== "failure" ? `
+      const scenario = ${JSON.stringify(kind)};
+      const { AppError } = await import(${JSON.stringify(pathToFileURL(resolve(root, "src/contracts.ts")).href)});
       const host = { key: "local", selector: "local", label: "This machine", local: true, hostId: "host-local" };
-      const project = { vcs: "git", path: "/projects/alpha", commonDir: "/git/alpha", name: "alpha" };
-      const checkout = { vcs: "git", path: "/projects/alpha", branch: "main", head: "abc", bare: false, locked: false, prunable: false };
+      const remote = { key: "remote", selector: "remote", label: "Remote machine", local: false, hostId: "host-remote" };
+      const name = scenario === "unsafe" ? "alpha\\\\name" : "alpha";
+      const project = { vcs: "git", path: "/projects/" + name, commonDir: "/git/alpha", name };
+      const checkout = { vcs: "git", path: project.path, branch: "main", head: "abc", bare: false, locked: false, prunable: false };
       mock.module(${JSON.stringify(client)}, () => ({
-        listMachines: Effect.succeed([host]),
-        connectMachine: () => Effect.succeed(host),
-        discover: () => Effect.succeed({ projects: [project], checkout: project,
+        listMachines: Effect.succeed(scenario === "edit" || scenario === "unsafe" ? [host] : [host, remote]),
+        connectMachine: machine => scenario === "connect" && machine.key === "remote"
+          ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
+          : Effect.succeed(machine),
+        discover: machine => Effect.succeed({ projects: machine.local ? [project] : [], checkout: machine.local ? project : undefined,
           sessions: [{ id: "session-local", label: "Session" }], clients: [],
-          roots: ["/projects"], cloneRoot: "/projects" }),
-        inspectProject: () => Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main"], revisions: [] }),
+          roots: ["/clones"], cloneRoot: "/clones" }),
+        inspectProject: (_, __, path) => path === project.path
+          ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main"], revisions: [] })
+          : Effect.fail(new AppError({ message: "Not a repository: " + path })),
         inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main"], revisions: [] }),
         inspectRevision: () => Effect.die("Unexpected revision helper"),
-        sourceForClone: () => Effect.die("Unexpected clone source helper"),
-        reviewClone: () => Effect.die("Unexpected clone review helper"),
-        submitClone: () => Effect.die("Unexpected clone launch helper"),
+        sourceForClone: () => Effect.succeed({ vcs: "git", url: "https://example.test/alpha.git",
+          sourceHostId: host.hostId, branches: ["main"], branch: "main" }),
+        reviewClone: (_, __, input) => {
+          process.stderr.write("REVIEW_CLONE " + input.repo + "\\n");
+          return input.repo === "/clones/alpha"
+            ? Effect.fail(new AppError({ message: "Clone destination already exists and is not a repository: " + input.repo }))
+            : Effect.succeed({ vcs: "git", input, hostId: remote.hostId, sessionId: input.sessionId,
+              repo: input.repo, existing: false, label: "Clone & Open", detail: "Destination: " + input.repo });
+        },
+        submitClone: () => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED\\n"); return { sessionId: "session-local", repo: "/safe/alpha" }; }),
         review: (_, __, input) => Effect.sync(() => { process.stderr.write("REVIEW_CALLED\\n");
           return { vcs: "git", input, hostId: host.hostId, sessionId: input.sessionId,
             path: project.path, action: "new-tab", checkout: "existing", branch: "main",
-            nameRole: "tab", name: input.name, label: "Open reviewed checkout", detail: "Destination: /projects/alpha" }; }),
+            nameRole: "tab", name: input.name, label: "Open reviewed checkout", detail: "Destination: " + project.path }; }),
         submit: () => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED\\n");
           return { sessionId: "session-local", path: project.path, action: "new-tab", pending: false }; })
       }));
@@ -95,8 +109,9 @@ async function withPopup(
     const { popup } = await import(${JSON.stringify(ui)});
     const context = ${kind === "pending"
       ? 'Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => process.stderr.write("DISCOVERY_INTERRUPTED"))))'
-      : kind === "edit" ? 'Effect.succeed("/projects/alpha")'
-        : 'Effect.fail(new Error("synthetic startup failure"))'
+      : kind === "failure" ? 'Effect.fail(new Error("synthetic startup failure"))'
+        : kind === "unsafe" ? 'Effect.succeed("/projects/alpha\\\\name")'
+          : 'Effect.succeed("/projects/alpha")'
     };
     BunRuntime.runMain(Effect.provide(popup([], context), BunServices.layer));
   `;
@@ -206,3 +221,56 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
     });
   }, 8000);
 }
+
+it("occupied automatic clone path stays editable after explicit review fails", async () => {
+  await withPopup("collision", async (pty) => {
+    await pty.waitForText("Existing checkout");
+    pty.write("\t\r"); // Machine field, then remote Rex host.
+    await pty.waitForText("Execution machine");
+    pty.write("\x1b[B\r");
+    await pty.waitForText("Review clone");
+    expect(pty.output()).toContain("Destination: /clones/alpha");
+    pty.write("\x13");
+    await pty.waitForText("Clone destination already exists and is not a repository");
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\t\r"); // Destination field from focused Machine.
+    await pty.waitForText("Clone destination: type absolute path");
+    pty.write("/safe/alpha\r");
+    await pty.waitForText("Destination: /safe/alpha");
+    pty.write("\x13");
+    await pty.waitForText("Review this action");
+    expect(pty.output()).toContain("REVIEW_CLONE /safe/alpha");
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
+it("existing checkout with backslash basename can open clone chooser and accept an absolute override", async () => {
+  await withPopup("unsafe", async (pty) => {
+    await pty.waitForText("Existing checkout");
+    pty.write("\t\t\r"); // Destination chooser.
+    await pty.waitForText("Clone this project");
+    expect(pty.output()).not.toContain("Could not open worktrees");
+    pty.write("\x1b[B\x1b[B\r"); // Choose Clone this project rather than the existing checkout.
+    await pty.waitForText("Project name is not a safe clone directory");
+    pty.write("/safe/alpha\r");
+    await pty.waitForText("Destination: /safe/alpha");
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
+it("machine field acceptance preserves the new connection error", async () => {
+  await withPopup("connect", async (pty) => {
+    await pty.waitForText("Existing checkout");
+    pty.write("\t\r");
+    await pty.waitForText("Execution machine");
+    pty.write("\x1b[B\r");
+    await pty.waitForText("Remote helper unavailable; install and reload Rex");
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
