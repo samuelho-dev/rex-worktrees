@@ -267,7 +267,6 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
       let focused: FormField = "project"
       let error: string | undefined
       let plan: LaunchPlan | undefined
-      let optionsExpanded = false
       let clonePlan: ClonePlan | undefined
       let cloneRoot = ""
       let cloneRoots: readonly string[] = []
@@ -528,34 +527,24 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on confirmation" : undefined, disabled: !draft.host
           }
         ]
-        if (draft.project?.vcs === "jj" && !draft.destination?.path)
+        if (draft.project?.vcs === "jj" && !draft.destination?.path || draft.clone?.vcs === "jj")
           rows.push({
             id: "branch", label: "Start from",
-            value: draft.destination?.revision ? draft.destination.label : "Select or type revision",
-            disabled: !draft.host || !draft.worktreeName
+            value: draft.destination?.revision ? draft.destination.label : draft.clone ? "Cloned default" : "Select or type revision",
+            disabled: !draft.host || !!draft.project && !draft.worktreeName
           })
-        if (draft.clone?.vcs === "git" && !draft.destination?.branch)
-          rows.push({ id: "branch", label: "Branch", value: "Select or type branch", disabled: !draft.host })
-        rows.push({ id: "options", label: "Options", value: optionsExpanded ? "Hide options ↑" : "Show options ↓" })
-        if (optionsExpanded) {
-          if (draft.clone || draft.project?.vcs === "git") rows.push({
+        if (draft.clone?.vcs === "git")
+          rows.push({ id: "branch", label: "Branch", value: draft.destination?.branch ?? "Select or type branch", disabled: !draft.host })
+        if (draft.clone || draft.project?.vcs === "git" && draft.destination?.branch && !draft.destination.path)
+          rows.push({
             id: "checkoutName", label: draft.clone?.vcs === "jj" ? "Workspace" : "Directory",
             value: draft.worktreeName ?? (draft.clone?.vcs === "jj" ? "Use cloned default workspace" : "Default (derived from branch)"),
-            disabled: !draft.host || !(draft.project || draft.clone) || !!draft.destination?.path && !draft.clone
-          })
-          if (draft.clone?.vcs === "git" && draft.destination?.branch) rows.push({
-            id: "branch", label: "Branch", value: draft.destination.branch,
             disabled: !draft.host
           })
-          if (draft.clone?.vcs === "jj") rows.push({
-            id: "branch", label: "Start from", value: draft.destination?.revision ? draft.destination.label : "Cloned default",
-            disabled: !draft.host
-          })
-          if (!draft.clone) rows.push({
-            id: "mode", label: "Mode", value: draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
-              : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host
-          })
-        }
+        if (!draft.clone) rows.push({
+          id: "mode", label: "Mode", value: draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
+            : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host
+        })
         const safeOpen = !draft.clone && !!draft.destination?.path && draft.session?.kind === "existing"
         return {
           rows: rows.map(row => ({ ...row, disabled: initializing || row.disabled })),
@@ -632,8 +621,9 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           if (!plan) {
             const safeOpen = !!draft.destination?.path && draft.session?.kind === "existing" &&
               current.success.checkout === "existing" && current.success.path === draft.destination.path &&
+              safeDisplayText(draft.destination.path) === draft.destination.path &&
               !current.success.detail && !current.success.warning && !view.fitWarning &&
-              naturalFormRows(view, yield* terminal.columns) + 3 <= (yield* terminal.rows)
+              naturalFormRows(view, yield* terminal.columns) + 1 <= (yield* terminal.rows)
             plan = current.success
             if (!safeOpen) { error = undefined; continue }
           }
@@ -653,7 +643,6 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           return
         }
         if (view.rows.find(row => row.id === action)?.disabled) continue
-        if (action === "options") { optionsExpanded = !optionsExpanded; continue }
         error = undefined
         const editing = yield* Effect.result(Effect.gen(function*() {
           if (action === "machine") {

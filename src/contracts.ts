@@ -311,7 +311,7 @@ export const CliFlagsSchema = Schema.Struct({
 })
 export type CliFlags = typeof CliFlagsSchema.Type
 
-export type FormField = "project" | "machine" | "destination" | "checkoutName" | "branch" | "session" | "mode" | "options" | "submit" | "cancel"
+export type FormField = "project" | "machine" | "destination" | "checkoutName" | "branch" | "session" | "mode" | "submit" | "cancel"
 export type FormRow = {
   readonly id: Exclude<FormField, "submit" | "cancel">
   readonly label: string
