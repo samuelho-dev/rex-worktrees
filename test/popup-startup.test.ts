@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "collision" | "unsafe" | "connect",
+  kind: "pending" | "failure" | "edit" | "collision" | "permission" | "unsafe" | "connect",
   run: (pty: {
     output: () => string;
     waitForText: (text: string) => Promise<void>;
@@ -90,7 +90,9 @@ async function withPopup(
         reviewClone: (_, __, input) => {
           process.stderr.write("REVIEW_CLONE " + input.repo + "\\n");
           return input.repo === "/clones/alpha"
-            ? Effect.fail(new AppError({ message: "Clone destination already exists and is not a repository: " + input.repo }))
+            ? Effect.fail(new AppError({ message: scenario === "permission"
+              ? "Cannot write clone destination parent: " + input.repo
+              : "Clone destination already exists and is not a repository: " + input.repo }))
             : Effect.succeed({ vcs: "git", input, hostId: remote.hostId, sessionId: input.sessionId,
               repo: input.repo, existing: false, label: "Clone & Open", detail: "Destination: " + input.repo });
         },
@@ -222,29 +224,34 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
   }, 8000);
 }
 
-it("occupied automatic clone path stays editable after explicit review fails", async () => {
-  await withPopup("collision", async (pty) => {
-    await pty.waitForText("Existing checkout");
-    pty.write("\t\r"); // Machine field, then remote Rex host.
-    await pty.waitForText("Execution machine");
-    pty.write("\x1b[B\r");
-    await pty.waitForText("Review clone");
-    expect(pty.output()).toContain("Destination: /clones/alpha");
-    pty.write("\x13");
-    await pty.waitForText("Clone destination already exists and is not a repository");
-    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\t\r"); // Destination field from focused Machine.
-    await pty.waitForText("Clone destination: type absolute path");
-    pty.write("/safe/alpha\r");
-    await pty.waitForText("Destination: /safe/alpha");
-    pty.write("\x13");
-    await pty.waitForText("Review this action");
-    expect(pty.output()).toContain("REVIEW_CLONE /safe/alpha");
-    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\x1b");
-    expect(await pty.exited).toBe(0);
-  });
-}, 8000);
+for (const [kind, diagnostic] of [
+  ["collision", "Clone destination already exists and is not a repository"],
+  ["permission", "Cannot write clone destination parent"]
+] as const) {
+  it(`automatic clone path stays editable after ${kind} review failure`, async () => {
+    await withPopup(kind, async (pty) => {
+      await pty.waitForText("Existing checkout");
+      pty.write("\t\r"); // Machine field, then remote Rex host.
+      await pty.waitForText("Execution machine");
+      pty.write("\x1b[B\r");
+      await pty.waitForText("Review clone");
+      expect(pty.output()).toContain("Destination: /clones/alpha");
+      pty.write("\x13");
+      await pty.waitForText(diagnostic);
+      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+      pty.write("\t\r"); // Destination field from focused Machine.
+      await pty.waitForText("Clone destination: type absolute path");
+      pty.write("/safe/alpha\r");
+      await pty.waitForText("Destination: /safe/alpha");
+      pty.write("\x13");
+      await pty.waitForText("Review this action");
+      expect(pty.output()).toContain("REVIEW_CLONE /safe/alpha");
+      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+      pty.write("\x1b");
+      expect(await pty.exited).toBe(0);
+    });
+  }, 8000);
+}
 
 it("existing checkout with backslash basename can open clone chooser and accept an absolute override", async () => {
   await withPopup("unsafe", async (pty) => {

@@ -411,8 +411,9 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         let path = source?.machineKey === host.key && source.hostId === host.hostId
           ? source.checkoutPath ?? source.repository.path : undefined
         if (!path && choice.path?.startsWith("/")) path = choice.path
-        if (!path && source) {
-          yield* cloneDestination(choice, host)
+        if (source && (source.machineKey !== host.key || source.hostId !== host.hostId)) {
+          if (path) yield* proposeClone(choice, host, path)
+          else yield* cloneDestination(choice, host)
           return undefined
         }
         if (!path) {
