@@ -34,7 +34,7 @@ export const connectMachine = Effect.fnUntraced(function*(machine: Machine) {
 });
 
 const request = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], body: RequestBody) {
-  const encoded: Request = { version: 3, hostId: host.hostId, ...body };
+  const encoded: Request = { version: 4, hostId: host.hostId, ...body };
   let response: Response;
   if (host.local) {
     response = yield* dispatchHost(encoded, command);
@@ -44,7 +44,7 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
     const raw = yield* remoteRex(current.selector, ["do", "worktrees_request", "--args", JSON.stringify({ request: JSON.stringify(encoded) }), "--json"]);
     response = yield* Schema.decodeUnknownEffect(RexWorktreesResponseSchema)(raw);
   }
-  if (response.hostId !== host.hostId || response.version !== 3 ||
+  if (response.hostId !== host.hostId || response.version !== 4 ||
     response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
     return yield* fail(`Unexpected Rex host/protocol response from ${host.label}; update rex-worktrees on that machine, run setup, and reload its Rex config`);
   return response;

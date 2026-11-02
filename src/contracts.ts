@@ -96,6 +96,14 @@ export type Association = typeof AssociationSchema.Type
 
 export const SessionTargetSchema = Schema.Struct({ id: SessionIdSchema, label: Schema.String })
 export type SessionTarget = typeof SessionTargetSchema.Type
+export const SessionSelectionSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("existing"), id: SessionIdSchema }),
+  Schema.Struct({
+    kind: Schema.Literal("new"), name: Schema.String.pipe(
+      Schema.check(Schema.isMaxLength(128), Schema.isPattern(/^(?=.*\S)(?!.*[\p{ASCII}&&\p{Cc}]).*$/v)))
+  })
+])
+export type SessionSelection = typeof SessionSelectionSchema.Type
 export const ClientTargetSchema = Schema.Struct({ id: ClientIdSchema, label: Schema.String })
 export type ClientTarget = typeof ClientTargetSchema.Type
 export const MachineSchema = Schema.Struct({ key: Schema.Union([Schema.Literal("local"), RegisteredHostIdSchema]), label: Schema.String, local: Schema.Boolean, selector: Schema.String })
@@ -115,13 +123,13 @@ export type JjCloneSource = typeof JjCloneSourceSchema.Type
 export const CloneSourceSchema = Schema.Union([GitCloneSourceSchema, JjCloneSourceSchema])
 export type CloneSource = typeof CloneSourceSchema.Type
 export const GitCloneInputSchema = Schema.Struct({
-  vcs: Schema.Literal("git"), source: GitCloneSourceSchema, repo: Schema.String, sessionId: SessionIdSchema,
+  vcs: Schema.Literal("git"), source: GitCloneSourceSchema, repo: Schema.String, session: SessionSelectionSchema,
   clientId: Schema.optional(ClientIdSchema), name: Schema.String, branch: Schema.String,
   branchMode: Schema.Literals(["existing", "create"]), worktreeName: Schema.optional(Schema.String)
 })
 export type GitCloneInput = typeof GitCloneInputSchema.Type
 export const JjCloneInputSchema = Schema.Struct({
-  vcs: Schema.Literal("jj"), source: JjCloneSourceSchema, repo: Schema.String, sessionId: SessionIdSchema,
+  vcs: Schema.Literal("jj"), source: JjCloneSourceSchema, repo: Schema.String, session: SessionSelectionSchema,
   clientId: Schema.optional(ClientIdSchema), name: Schema.String,
   worktreeName: Schema.optional(Schema.String), revision: Schema.optional(Schema.String)
 })
@@ -129,7 +137,7 @@ export type JjCloneInput = typeof JjCloneInputSchema.Type
 export const CloneInputSchema = Schema.Union([GitCloneInputSchema, JjCloneInputSchema])
 export type CloneInput = typeof CloneInputSchema.Type
 const ClonePlanFields = {
-  hostId: ServerHostIdSchema, sessionId: SessionIdSchema, clientId: Schema.optional(ClientIdSchema),
+  hostId: ServerHostIdSchema, clientId: Schema.optional(ClientIdSchema),
   repo: Schema.String, existing: Schema.Boolean, commonDir: Schema.optional(Schema.String),
   label: Schema.String, detail: Schema.optional(Schema.String), warning: Schema.optional(Schema.String)
 }
@@ -148,10 +156,10 @@ export const CloneLaunchResultSchema = Schema.Struct({
   repo: Schema.String, pending: Schema.Literal(true), warning: Schema.optional(Schema.String)
 })
 export type CloneLaunchResult = typeof CloneLaunchResultSchema.Type
-export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String) })
+export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, sessionId: SessionIdSchema, rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String) })
 export type CloneTaskRequest = typeof CloneTaskRequestSchema.Type
 const LaunchInputFields = {
-  repo: Schema.String, sessionId: SessionIdSchema, name: Schema.String,
+  repo: Schema.String, session: SessionSelectionSchema, name: Schema.String,
   clientId: Schema.optional(ClientIdSchema), additional: Schema.optional(Schema.Boolean), split: Schema.optional(Schema.Boolean)
 }
 export const GitLaunchInputSchema = Schema.Struct({
@@ -167,7 +175,7 @@ export type JjLaunchInput = typeof JjLaunchInputSchema.Type
 export const LaunchInputSchema = Schema.Union([GitLaunchInputSchema, JjLaunchInputSchema])
 export type LaunchInput = typeof LaunchInputSchema.Type
 const LaunchPlanFields = {
-  hostId: ServerHostIdSchema, sessionId: SessionIdSchema, clientId: Schema.optional(ClientIdSchema),
+  hostId: ServerHostIdSchema, clientId: Schema.optional(ClientIdSchema),
   path: Schema.String, worktreeRoot: Schema.optional(Schema.String),
   action: Schema.Literals(["focus", "new-tab", "split"]),
   target: Schema.optional(Schema.Struct({ windowId: WindowIdSchema, blockId: BlockIdSchema, label: Schema.String })),
@@ -211,7 +219,7 @@ export const JjTaskRequestSchema = Schema.Struct({
 export type JjTaskRequest = typeof JjTaskRequestSchema.Type
 export const TaskRequestSchema = Schema.Union([GitTaskRequestSchema, JjTaskRequestSchema])
 export type TaskRequest = typeof TaskRequestSchema.Type
-export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(3), hostId: ServerHostIdSchema })
+export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(4), hostId: ServerHostIdSchema })
 export type RequestIdentity = typeof RequestIdentitySchema.Type
 export const RequestSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), context: Schema.optional(Schema.String) }),
@@ -250,6 +258,7 @@ export const PopupBoundsSchema = Schema.Tuple([Schema.Number, Schema.Number, Sch
 export type PopupBounds = typeof PopupBoundsSchema.Type
 export const RexIdentitySchema = Schema.Struct({ host_id: ServerHostIdSchema, endpoint: Schema.String, principal: Schema.Struct({ transport: Schema.String }) })
 export const RexSessionsSchema = Schema.Struct({ sessions: Schema.Array(Schema.Struct({ session_id: SessionIdSchema, label: Schema.String })) })
+export const RexSessionCreatedSchema = Schema.Struct({ session_id: SessionIdSchema })
 export const RexClientsSchema = Schema.Struct({
   clients: Schema.Array(Schema.Struct({
     client_id: ClientIdSchema, info: Schema.optional(Schema.Struct({ kind: Schema.String, label: Schema.optional(Schema.String) })),
@@ -339,7 +348,7 @@ export type Draft = {
   readonly sourcePath?: string
   readonly destination?: Destination
   readonly worktreeName?: string
-  readonly sessionId?: SessionId
+  readonly session?: SessionSelection
   readonly clientId?: ClientId
   readonly mode: "auto" | "new-tab" | "split"
 }

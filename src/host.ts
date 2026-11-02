@@ -17,7 +17,7 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
         : request.kind === "plan" || request.kind === "launch" ? [request.input.repo, ...(request.input.path ? [request.input.path] : [])]
           : [request.repo];
   if (paths.some(value => !path.isAbsolute(value))) return yield* Effect.fail(new AppError({ message: "Destination repository and worktree paths must be absolute" }));
-  const identity: RequestIdentity = { version: 3, hostId: host.id };
+  const identity: RequestIdentity = { version: 4, hostId: host.id };
   let result: Response;
   switch (request.kind) {
     case "discover": {

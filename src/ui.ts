@@ -167,10 +167,10 @@ export const generatedName = (draft: Draft) => draft.worktreeName ??
   (draft.clone?.vcs === "jj" ? draft.projectChoice?.name : draft.destination?.label) ??
   draft.projectChoice?.name ?? "Worktree"
 export const inputFor = (draft: Draft): LaunchInput | undefined => {
-  if (!draft.host || !draft.project || !draft.projectChoice || !draft.destination || !draft.sessionId) return undefined
+  if (!draft.host || !draft.project || !draft.projectChoice || !draft.destination || !draft.session) return undefined
   const common = {
     repo: draft.project.vcs === "jj" ? draft.sourcePath ?? draft.project.path : draft.project.path,
-    sessionId: draft.sessionId, name: generatedName(draft),
+    session: draft.session, name: generatedName(draft),
     clientId: draft.clientId, additional: draft.mode === "new-tab", split: draft.mode === "split"
   }
   if (draft.project.vcs === "jj") return draft.destination.path
@@ -227,13 +227,13 @@ export const selectRevision = (draft: Draft, choice: JjRevisionChoice): Draft =>
   changeDestination(draft, { revision: choice.revision.commitId, label: choice.label }, draft.worktreeName)
 
 export const cloneInputFor = (draft: Draft): CloneInput | undefined => {
-  if (!draft.host || !draft.clone || !draft.sessionId || !draft.clone.repo.startsWith("/")) return undefined
+  if (!draft.host || !draft.clone || !draft.session || !draft.clone.repo.startsWith("/")) return undefined
   if (draft.clone.vcs === "jj") return {
     vcs: "jj", source: {
       vcs: "jj", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
       revisions: draft.clone.revisions, ...(draft.clone.revision ? { revision: draft.clone.revision } : {})
     },
-    repo: draft.clone.repo, sessionId: draft.sessionId, clientId: draft.clientId,
+    repo: draft.clone.repo, session: draft.session, clientId: draft.clientId,
     name: generatedName(draft), ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {}),
     ...(draft.destination?.revision ? { revision: draft.destination.revision } : {})
   }
@@ -243,7 +243,7 @@ export const cloneInputFor = (draft: Draft): CloneInput | undefined => {
       vcs: "git", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
       branches: draft.clone.branches, branch: draft.clone.branch
     },
-    repo: draft.clone.repo, sessionId: draft.sessionId, clientId: draft.clientId,
+    repo: draft.clone.repo, session: draft.session, clientId: draft.clientId,
     name: generatedName(draft), branch: draft.destination.branch,
     branchMode: draft.clone.branches.includes(draft.destination.branch) ? "existing" : "create",
     ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {})
@@ -465,9 +465,10 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         ...found.projects.map(repo => known(connected.success, repo, found.checkout))]
         sessions = found.sessions
         draft = {
-          ...draft, sessionId: sessions.some(item => item.id === draft.sessionId) ? draft.sessionId
-            : connected.success.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? origin.sessionId
-              : sessions.length === 1 ? sessions[0]?.id : undefined,
+          ...draft, session: draft.session?.kind === "new" ? draft.session
+            : sessions.some(item => item.id === (draft.session?.kind === "existing" ? draft.session.id : undefined)) ? draft.session
+              : connected.success.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? { kind: "existing", id: origin.sessionId }
+                : sessions.length === 1 ? { kind: "existing", id: sessions[0]!.id } : undefined,
           clientId: focusClient(found.clients)
         }
         if (!draft.projectChoice && found.checkout && discoveredContext) {
@@ -495,6 +496,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           }
         }
         error = undefined
+
       })
       const formView = (initializing = false): FormView => {
         const rows: FormRow[] = [
@@ -521,8 +523,9 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
                 ? false : !(draft.clone || draft.worktreeName || draft.destination?.path))
           },
           {
-            id: "session", label: "Session", value: sessions.find(s => s.id === draft.sessionId)?.label ?? draft.sessionId ?? "Choose exact session",
-            detail: draft.sessionId, disabled: !draft.host
+            id: "session", label: "Session", value: draft.session?.kind === "new" ? `New: ${draft.session.name}`
+              : sessions.find(s => s.id === (draft.session?.kind === "existing" ? draft.session.id : undefined))?.label ?? (draft.session?.kind === "existing" ? draft.session.id : "Choose or type new session"),
+            detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on submit" : undefined, disabled: !draft.host
           },
           {
             id: "mode", label: "Mode", value: draft.clone ? "New tab (clone task)" : draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
@@ -543,7 +546,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
                 : !draft.destination && draft.project?.vcs !== "jj" && draft.clone?.vcs !== "jj" ? "Select a branch"
                   : draft.project?.vcs === "jj" && (!draft.worktreeName && !draft.destination?.path || !!draft.worktreeName && !draft.destination?.revision)
                     ? "Choose an existing workspace or a new workspace name and starting revision"
-                    : !draft.sessionId ? "Select an exact Rex session" : undefined),
+                    : !draft.session ? "Choose an existing Rex session or type a new name" : undefined),
           fitWarning: activeView?.fitWarning
         }
       }
@@ -654,8 +657,8 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
                 item.source.hostId !== host.hostId),
               ...found.projects.map(repo => known(host, repo, found.checkout))]
               sessions = found.sessions
-              if (!sessions.some(item => item.id === draft.sessionId))
-                draft = { ...draft, sessionId: sessions.length === 1 ? sessions[0]?.id : undefined }
+              if (draft.session?.kind === "existing" && !sessions.some(item => item.id === (draft.session?.kind === "existing" ? draft.session.id : undefined)))
+                draft = { ...draft, session: sessions.length === 1 ? { kind: "existing", id: sessions[0]!.id } : undefined }
               draft = { ...draft, clientId: focusClient(found.clients) }
             } else draft = changeProjectChoice(draft, choice)
           } else if (action === "destination") {
@@ -800,12 +803,12 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             if (!draft.host) return yield* Effect.fail(new AppError({ message: "Select a machine before choosing a session" }))
             const found = yield* discover(draft.host, command)
             sessions = found.sessions
-            if (!sessions.length) return yield* Effect.fail(new AppError({ message: "No Rex sessions available on selected machine" }))
             draft = { ...draft, clientId: focusClient(found.clients) }
-            draft = {
-              ...draft, sessionId: yield* choose("Exact Rex session",
-                sessions.map(item => selected(item.id, item.id === draft.sessionId, item.label, item.id)))
-            }
+            const picked = yield* inputChoice({
+              message: "Session (select existing or type new name)",
+              choices: sessions.map(item => selected(item.id, draft.session?.kind === "existing" && item.id === draft.session.id, item.label, item.id))
+            })
+            draft = { ...draft, session: picked.kind === "selected" ? { kind: "existing", id: picked.value } : { kind: "new", name: picked.text } }
           } else if (action === "mode") {
             draft = {
               ...draft, mode: yield* choose<Draft["mode"]>("Open mode", [

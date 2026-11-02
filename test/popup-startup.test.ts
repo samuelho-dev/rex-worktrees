@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "collision" | "permission" | "unsafe" | "connect",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect",
   run: (pty: {
     output: () => string;
     waitForText: (text: string | RegExp) => Promise<void>;
@@ -78,7 +78,8 @@ async function withPopup(
           ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
           : Effect.succeed(machine),
         discover: machine => Effect.succeed({ projects: machine.local ? [project] : [], checkout: machine.local ? project : undefined,
-          sessions: [{ id: "session-local", label: "Session" }], clients: [],
+          sessions: scenario === "session" ? [{ id: "session-first", label: "Same label" }, { id: "session-second", label: "Same label" }]
+            : [{ id: "session-local", label: "Session" }], clients: [],
           roots: ["/clones"], cloneRoot: "/clones" }),
         inspectProject: (_, __, path) => path === project.path
           ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main"], revisions: [] })
@@ -93,16 +94,16 @@ async function withPopup(
             ? Effect.fail(new AppError({ message: scenario === "permission"
               ? "Cannot write clone destination parent: " + input.repo
               : "Clone destination already exists and is not a repository: " + input.repo }))
-            : Effect.succeed({ vcs: "git", input, hostId: remote.hostId, sessionId: input.sessionId,
+            : Effect.succeed({ vcs: "git", input, hostId: remote.hostId,
               repo: input.repo, existing: false, label: "Clone & Open", detail: "Destination: " + input.repo });
         },
         submitClone: () => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED\\n"); return { sessionId: "session-local", repo: "/safe/alpha" }; }),
         review: (_, __, input) => Effect.sync(() => { process.stderr.write("REVIEW_CALLED\\n");
-          return { vcs: "git", input, hostId: host.hostId, sessionId: input.sessionId,
+          return { vcs: "git", input, hostId: host.hostId,
             path: project.path, action: "new-tab", checkout: "existing", branch: "main",
             nameRole: "tab", name: input.name, label: "Open reviewed checkout", detail: "Destination: " + project.path }; }),
-        submit: () => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED\\n");
-          return { sessionId: "session-local", path: project.path, action: "new-tab", pending: false }; })
+        submit: (_, __, input) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + "\\n");
+          return { sessionId: input.session.kind === "new" ? "created-id" : input.session.id, path: project.path, action: "new-tab", pending: false }; })
       }));
       const originalRex = await import(${JSON.stringify(rex)});
       mock.module(${JSON.stringify(rex)}, () => ({ ...originalRex, makePopupSizer: Effect.succeed(() => Effect.succeed(undefined)) }));
@@ -216,6 +217,40 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
     });
   }, 8000);
 }
+
+it("typed session with a duplicate existing label stays new through editor acceptance and explicit review", async () => {
+  await withPopup("session", async (pty) => {
+    await pty.waitForText("Existing checkout");
+    pty.write("\t\t\t\t\r");
+    await pty.waitForText("Session (select existing or type new name)");
+    pty.write("Same label\r");
+    await pty.waitForText("New: Same label");
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    await pty.waitForText("Review this action");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"new","name":"Same label"}');
+  });
+}, 8000);
+
+it("duplicate session labels still select the exact second ID", async () => {
+  await withPopup("session", async (pty) => {
+    await pty.waitForText("Existing checkout");
+    pty.write("\t\t\t\t\r");
+    await pty.waitForText("Session (select existing or type new name)");
+    pty.write("\x1b[B\x1b[B\r");
+    await pty.waitForText("session-second");
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    pty.write("\x13");
+    await pty.waitForText("Review this action");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"existing","id":"session-second"}');
+  });
+}, 8000);
 
 for (const [kind, diagnostic] of [
   ["collision", "Clone destination already exists and is not a repository"],

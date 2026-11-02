@@ -70,7 +70,7 @@ export type BrandedIdentitySafety = [
 ];
 it("every request and reply requires protocol version and destination identity", () => {
   const request = {
-    version: 3,
+    version: 4,
     hostId: "real-host-id",
     kind: "project",
     path: "/repo",
@@ -82,13 +82,13 @@ it("every request and reply requires protocol version and destination identity",
     Schema.decodeUnknownSync(RequestSchema)({ ...request, kind: "launch" }),
   ).toThrow();
   expect(() =>
-    Schema.decodeUnknownSync(RequestSchema)({ ...request, version: 1 }),
+    Schema.decodeUnknownSync(RequestSchema)({ ...request, version: 3 }),
   ).toThrow();
   expect(() =>
     Schema.decodeUnknownSync(RequestSchema)({ ...request, hostId: undefined }),
   ).toThrow();
   const response = {
-    version: 3,
+    version: 4,
     hostId: "real-host-id",
     kind: "project-missing",
     path: "/repo",
@@ -100,7 +100,7 @@ it("every request and reply requires protocol version and destination identity",
     Schema.decodeUnknownSync(ResponseSchema)({ ...response, kind: "launch" }),
   ).toThrow();
   expect(() =>
-    Schema.decodeUnknownSync(ResponseSchema)({ ...response, version: 1 }),
+    Schema.decodeUnknownSync(ResponseSchema)({ ...response, version: 3 }),
   ).toThrow();
   expect(() =>
     Schema.decodeUnknownSync(ResponseSchema)({
@@ -110,7 +110,7 @@ it("every request and reply requires protocol version and destination identity",
   ).toThrow();
 });
 it("discovery requires a destination-local clone root", () => {
-  const response = { version: 3, hostId: "fixture-host", kind: "discover", sessions: [], clients: [], projects: [], roots: [], cloneRoot: "/home/fixture" };
+  const response = { version: 4, hostId: "fixture-host", kind: "discover", sessions: [], clients: [], projects: [], roots: [], cloneRoot: "/home/fixture" };
   expect(Schema.decodeUnknownSync(ResponseSchema)(response)).toMatchObject(response);
   expect(() => Schema.decodeUnknownSync(ResponseSchema)({ ...response, cloneRoot: undefined })).toThrow();
 });
@@ -119,7 +119,7 @@ it("discovery requires a destination-local clone root", () => {
 it("native action responses preserve empty collections and detached branches without accepting malformed envelopes", () => {
   const decode = Schema.decodeUnknownSync(RexWorktreesResponseSchema);
   const empty = {
-    version: 3,
+    version: 4,
     hostId: "host",
     kind: "worktrees",
     repository: { vcs: "git", path: "/repo", commonDir: "/repo/.git", name: "repo" },
@@ -145,7 +145,7 @@ it("native action responses preserve empty collections and detached branches wit
   expect(decode(JSON.stringify(JSON.stringify(detached)))).toEqual(detached);
   expect(() => decode(JSON.stringify(empty))).toThrow();
   expect(() =>
-    decode(JSON.stringify(JSON.stringify({ ...empty, version: 1 }))),
+    decode(JSON.stringify(JSON.stringify({ ...empty, version: 3 }))),
   ).toThrow();
   expect(() =>
     decode(JSON.stringify(JSON.stringify({ ...empty, hostId: undefined }))),
@@ -162,12 +162,11 @@ it("review comparison ignores JSON key order and warnings but pins host, base, r
     input: {
       vcs: "git",
       repo: "/repo",
-      sessionId,
+      session: { kind: "existing", id: sessionId },
       branch: "feature/topic",
       worktreeName: "task-name",
       name: "Feature",
     },
-    sessionId,
     path: "/trees/task-name",
     branch: "feature/topic",
     checkout: "create",
@@ -207,22 +206,22 @@ it("clone protocol preserves separate source, review, launch and task identities
   const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("target");
   const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("session");
   const plan: ClonePlan = {
-    vcs: "git", hostId, sessionId, repo: "/target/repo", existing: false, label: "Clone & Open",
+    vcs: "git", hostId, repo: "/target/repo", existing: false, label: "Clone & Open",
     input: {
       vcs: "git", source: { vcs: "git", sourceHostId: Schema.decodeUnknownSync(ServerHostIdSchema)("source"), url: "git@example.org:org/repo.git", branches: ["main", "topic"], branch: "main" },
-      repo: "/target/repo", sessionId, name: "Task", branch: "topic", branchMode: "existing"
+      repo: "/target/repo", session: { kind: "existing", id: sessionId }, name: "Task", branch: "topic", branchMode: "existing"
     }
   };
-  const request = { version: 3, hostId, kind: "clone-launch", input: plan.input, reviewed: plan };
+  const request = { version: 4, hostId, kind: "clone-launch", input: plan.input, reviewed: plan };
   expect(Schema.decodeUnknownSync(RequestSchema)(request)).toMatchObject(request);
-  expect(Schema.decodeUnknownSync(CloneTaskRequestSchema)({ plan })).toMatchObject({ plan });
+  expect(Schema.decodeUnknownSync(CloneTaskRequestSchema)({ plan, sessionId })).toMatchObject({ plan, sessionId });
   expect(Schema.decodeUnknownSync(ResponseSchema)({
-    version: 3, hostId, kind: "clone-launch",
+    version: 4, hostId, kind: "clone-launch",
     result: { hostId, sessionId, windowId: "window", blockId: "block", repo: plan.repo, pending: true }
   }).kind).toBe("clone-launch");
   expect(() => Schema.decodeUnknownSync(RequestSchema)({ ...request, reviewed: undefined })).toThrow();
   expect(() => Schema.decodeUnknownSync(ResponseSchema)({
-    version: 3, hostId, kind: "clone-launch",
+    version: 4, hostId, kind: "clone-launch",
     result: { hostId, sessionId, windowId: "window", blockId: "block", path: "/fabricated", pending: true }
   })).toThrow();
   expect(sameClonePlan(plan, { ...plan, warning: "Informational warning" })).toBe(true);
@@ -243,8 +242,8 @@ it("JJ review and clone pin source workspace and full base identity", () => {
     changeId: Schema.decodeUnknownSync(JjChangeIdSchema)("b".repeat(32)), description: "base"
   };
   const plan: LaunchPlan = {
-    vcs: "jj", hostId, sessionId, input: {
-      vcs: "jj", repo: "/source-workspace", sessionId,
+    vcs: "jj", hostId, input: {
+      vcs: "jj", repo: "/source-workspace", session: { kind: "existing", id: sessionId },
       name: "Task", worktreeName: "task", revision: "@-"
     },
     path: "/trees/task", checkout: "create", workspaceName: Schema.decodeUnknownSync(JjWorkspaceNameSchema)("task"),
@@ -259,16 +258,16 @@ it("JJ review and clone pin source workspace and full base identity", () => {
     revisions: [{ expression: "@-", label: "base", revision }], revision
   };
   const clone: ClonePlan = {
-    vcs: "jj", hostId, sessionId, repo: "/clone", existing: false, label: "Clone & Open",
-    input: { vcs: "jj", source, repo: "/clone", sessionId, name: "Task", revision: revision.commitId }, base: revision
+    vcs: "jj", hostId, repo: "/clone", existing: false, label: "Clone & Open",
+    input: { vcs: "jj", source, repo: "/clone", session: { kind: "existing", id: sessionId }, name: "Task", revision: revision.commitId }, base: revision
   };
-  expect(Schema.decodeUnknownSync(CloneTaskRequestSchema)({ plan: clone })).toMatchObject({ plan: clone });
+  expect(Schema.decodeUnknownSync(CloneTaskRequestSchema)({ plan: clone, sessionId })).toMatchObject({ plan: clone, sessionId });
   expect(sameClonePlan(clone, { ...clone, base: { ...revision, changeId: Schema.decodeUnknownSync(JjChangeIdSchema)("c".repeat(32)) } })).toBe(false);
   expect(sameClonePlan(clone, { ...clone, input: { ...clone.input, revision: undefined } })).toBe(false);
-  const response = { version: 3, hostId, kind: "revision", revision };
+  const response = { version: 4, hostId, kind: "revision", revision };
   expect(Schema.decodeUnknownSync(ResponseSchema)(response)).toMatchObject(response);
-  expect(Schema.decodeUnknownSync(RequestSchema)({ version: 3, hostId, kind: "revision", repo: "/source-workspace", revision: "@-" }).kind).toBe("revision");
-  expect(() => Schema.decodeUnknownSync(RequestSchema)({ version: 2, hostId, kind: "revision", repo: "/source-workspace", revision: "@-" })).toThrow();
+  expect(Schema.decodeUnknownSync(RequestSchema)({ version: 4, hostId, kind: "revision", repo: "/source-workspace", revision: "@-" }).kind).toBe("revision");
+  expect(() => Schema.decodeUnknownSync(RequestSchema)({ version: 3, hostId, kind: "revision", repo: "/source-workspace", revision: "@-" })).toThrow();
 });
 
 it.live("a real missing destination survives host-request and Rex's nested response envelope", () =>
@@ -279,9 +278,9 @@ it.live("a real missing destination survives host-request and Rex's nested respo
       // Rex is optional in CI; when present this checks the real local host-request path.
       if (Result.isFailure(available)) return;
       const path = join(root, "missing");
-      const request = { version: 3, hostId: available.success.id, kind: "project", path };
+      const request = { version: 4, hostId: available.success.id, kind: "project", path };
       const reply = yield* hostRequest(JSON.stringify(request), ["/usr/bin/false"]);
-      expect(reply).toEqual({ version: 3, hostId: available.success.id, kind: "project-missing", path });
+      expect(reply).toEqual({ version: 4, hostId: available.success.id, kind: "project-missing", path });
       expect(Schema.decodeUnknownSync(RexWorktreesResponseSchema)(JSON.stringify(JSON.stringify(reply)))).toEqual(reply);
     } finally {
       yield* Effect.promise(() => rm(root, { recursive: true, force: true }));

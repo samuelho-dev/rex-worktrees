@@ -3,14 +3,17 @@ import { access } from "node:fs/promises";
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveWorktreeRoot } from "./config.ts";
-import { AppError, CommandError, BlockIdSchema, RexProcessSchema, RexDirectorySchema, type BlockId, type CloneInput, type ClonePlan, type CloneLaunchResult, type CloneTaskRequest, type ServerHostId, type SessionId, type WindowId, type TaskRequest, type LaunchInput, type LaunchPlan, type LaunchResult, type Association, type JjRevision, type JjWorkspaceName, type RepositoryHead } from "./contracts.ts";
+import { AppError, CommandError, BlockIdSchema, RexProcessSchema, RexDirectorySchema, SessionSelectionSchema, type BlockId, type CloneInput, type ClonePlan, type CloneLaunchResult, type CloneTaskRequest, type ServerHostId, type SessionId, type WindowId, type TaskRequest, type LaunchInput, type LaunchPlan, type LaunchResult, type Association, type JjRevision, type JjWorkspaceName, type RepositoryHead, type SessionSelection } from "./contracts.ts";
 import { cloneRepository as cloneGitRepository, createWorktree, gitContext, listBranches, listWorktrees as listGitWorktrees, missing, origin, originDefaultHead, planWorktree, remoteBranchHead, remoteBranches, repositoryHead, safeOrigin, validCloneBranch } from "./git.ts";
 import * as jj from "./jj.ts";
 import { repository } from "./repositories.ts";
 import { associations, rememberCloneRoot, saveAssociation } from "./state.ts";
-import { createSplit, createTab, focus, listClients, listSessions, localDirectoryUri, localHost, rex, windowList } from "./rex.ts";
+import { createSession, createSplit, createTab, focus, listClients, listSessions, localDirectoryUri, localHost, rex, windowList } from "./rex.ts";
 
 const fail = (message: string) => Effect.fail(new AppError({ message }));
+const sameSession = (a: SessionSelection, b: SessionSelection) =>
+  a.kind === b.kind && (a.kind === "existing" && b.kind === "existing" ? a.id === b.id
+    : a.kind === "new" && b.kind === "new" && a.name === b.name);
 const canonical = Effect.fnUntraced(function*(path: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.realPath(path);
@@ -49,7 +52,11 @@ const liveBlock = Effect.fnUntraced(function*(sessionId: SessionId, windowId: Wi
 export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expectedHostId?: ServerHostId) {
   const host = yield* localHost;
   if (expectedHostId && host.id !== expectedHostId) return yield* fail(`Wrong Rex host: expected ${expectedHostId}, got ${host.id}`);
-  if (!(yield* listSessions).some(item => item.id === input.sessionId)) return yield* fail(`Rex session ${input.sessionId} does not exist locally`);
+  yield* Schema.decodeUnknownEffect(SessionSelectionSchema)(input.session);
+  if (input.session.kind === "existing") {
+    const sessionId = input.session.id;
+    if (!(yield* listSessions).some(item => item.id === sessionId)) return yield* fail(`Rex session ${sessionId} does not exist locally`);
+  }
   const clients = yield* listClients;
   if (input.clientId && !clients.some(item => item.id === input.clientId)) return yield* fail(`Rex app client ${input.clientId} is not connected locally`);
   const clientId = input.clientId ?? (clients.length === 1 ? clients[0]?.id : undefined);
@@ -110,7 +117,8 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   if (!clientId && clients.length > 1) warning = [warning, "Multiple Rex apps are connected; select the session in the intended app"].filter(Boolean).join("; ");
   let target: LaunchPlan["target"];
   for (const entry of records) {
-    if (entry.vcs !== repo.vcs || entry.hostId !== host.id || entry.commonDir !== repo.commonDir || entry.path !== path || entry.sessionId !== input.sessionId) continue;
+    if (entry.vcs !== repo.vcs || entry.hostId !== host.id || entry.commonDir !== repo.commonDir || entry.path !== path ||
+      input.session.kind !== "existing" || entry.sessionId !== input.session.id) continue;
     const label = yield* liveBlock(entry.sessionId, entry.windowId, entry.blockId, host.id, path);
     if (label !== false) { target = { windowId: entry.windowId, blockId: entry.blockId, label }; break; }
   }
@@ -122,7 +130,7 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   if (input.vcs === "jj" && checkout === "create")
     detail = [detail, `Creating a JJ workspace snapshots ${repo.path}; its working-copy commit and colocated Git index intent-to-add entries may change.`].filter(Boolean).join(" ");
   const common = {
-    hostId: host.id, sessionId: input.sessionId, ...(clientId ? { clientId } : {}), path,
+    hostId: host.id, ...(clientId ? { clientId } : {}), path,
     ...(worktreeRoot ? { worktreeRoot } : {}), action, ...(target ? { target } : {}),
     nameRole, ...(nameRole !== "none" ? { name: input.name } : {}),
     ...(detail ? { detail } : {}), ...(warning ? { warning } : {})
@@ -145,8 +153,8 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
 export const sameLaunchPlan = (a: LaunchPlan, b: LaunchPlan): boolean =>
   a.vcs === b.vcs && a.input.vcs === b.input.vcs &&
   a.hostId === b.hostId && a.worktreeRoot === b.worktreeRoot &&
-  a.sessionId === b.sessionId && a.clientId === b.clientId &&
-  a.input.repo === b.input.repo && a.input.sessionId === b.input.sessionId &&
+  a.clientId === b.clientId &&
+  a.input.repo === b.input.repo && sameSession(a.input.session, b.input.session) &&
   a.input.path === b.input.path && a.input.worktreeName === b.input.worktreeName &&
   a.input.name === b.input.name && a.input.clientId === b.input.clientId &&
   a.input.additional === b.input.additional && a.input.split === b.input.split &&
@@ -168,18 +176,20 @@ export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: r
   if (reviewed && !sameLaunchPlan(reviewed, plan)) return yield* fail("Launch plan changed since review; inspect the destination before submitting again");
   if (plan.action === "focus") {
     const target = plan.target;
-    if (!target) return yield* fail("The reviewed focus target is no longer available");
-    const warning = [plan.warning, yield* focus(plan.sessionId, target.windowId, plan.clientId, target.blockId)].filter(Boolean).join("; ") || undefined;
+    if (!target || plan.input.session.kind !== "existing") return yield* fail("The reviewed focus target is no longer available");
+    const sessionId = plan.input.session.id;
+    const warning = [plan.warning, yield* focus(sessionId, target.windowId, plan.clientId, target.blockId)].filter(Boolean).join("; ") || undefined;
     const result: LaunchResult = {
-      hostId: plan.hostId, sessionId: plan.sessionId, windowId: target.windowId, blockId: target.blockId, path: plan.path,
+      hostId: plan.hostId, sessionId, windowId: target.windowId, blockId: target.blockId, path: plan.path,
       pending: false, action: plan.action, warning
     };
     return result;
   }
   const repo = yield* repository(plan.input.repo);
   if (repo.vcs !== plan.vcs) return yield* fail("Repository backend changed since review");
+  const sessionId = plan.input.session.kind === "existing" ? plan.input.session.id : yield* createSession(plan.input.session.name);
   const common = {
-    repo: repo.path, path: plan.path, commonDir: repo.commonDir, sessionId: plan.sessionId, hostId: plan.hostId,
+    repo: repo.path, path: plan.path, commonDir: repo.commonDir, sessionId, hostId: plan.hostId,
     ...(process.env.REX_BIN_DIR ? { rexBinDir: process.env.REX_BIN_DIR } : {}),
     ...(process.env.REX_WORKTREES_LOCAL_ENDPOINT ? { rexLocalEndpoint: process.env.REX_WORKTREES_LOCAL_ENDPOINT } : {}),
     ...(plan.worktreeRoot ? { worktreeRoot: plan.worktreeRoot } : {})
@@ -199,11 +209,11 @@ export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: r
   const name = plan.name;
   if (!name) return yield* fail("The reviewed Rex tab name is no longer available");
   const created = plan.action === "split"
-    ? target ? yield* createSplit(plan.sessionId, target.windowId, target.blockId, name, plan.path, argv) : yield* fail("The reviewed split target is no longer available")
-    : yield* createTab(plan.sessionId, name, plan.checkout === "existing" ? plan.path : repo.path, argv);
-  const warning = [plan.warning, yield* focus(plan.sessionId, created.windowId, plan.clientId, created.blockId)].filter(Boolean).join("; ") || undefined;
+    ? target ? yield* createSplit(sessionId, target.windowId, target.blockId, name, plan.path, argv) : yield* fail("The reviewed split target is no longer available")
+    : yield* createTab(sessionId, name, plan.checkout === "existing" ? plan.path : repo.path, argv);
+  const warning = [plan.warning, yield* focus(sessionId, created.windowId, plan.clientId, created.blockId)].filter(Boolean).join("; ") || undefined;
   const result: LaunchResult = {
-    hostId: plan.hostId, sessionId: plan.sessionId, windowId: created.windowId, blockId: created.blockId, path: plan.path,
+    hostId: plan.hostId, sessionId, windowId: created.windowId, blockId: created.blockId, path: plan.path,
     pending: true, action: plan.action, warning
   };
   return result;
@@ -333,7 +343,11 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
   const host = yield* localHost;
   if (expectedHostId && host.id !== expectedHostId) return yield* fail("Wrong Rex clone host");
   if (input.vcs !== input.source.vcs) return yield* fail("Clone source backend does not match request");
-  if (!(yield* listSessions).some(item => item.id === input.sessionId)) return yield* fail("Requested Rex session does not exist");
+  yield* Schema.decodeUnknownEffect(SessionSelectionSchema)(input.session);
+  if (input.session.kind === "existing") {
+    const sessionId = input.session.id;
+    if (!(yield* listSessions).some(item => item.id === sessionId)) return yield* fail("Requested Rex session does not exist");
+  }
   const clients = yield* listClients;
   if (input.clientId && !clients.some(item => item.id === input.clientId)) return yield* fail("Requested Rex app client is not connected");
   if (!input.name.trim() || input.name.startsWith("-") || /[\p{ASCII}&&\p{Cc}]/v.test(input.name)) return yield* fail("Invalid Rex tab name");
@@ -368,7 +382,7 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
     ? `JJ ${input.worktreeName ? "workspace creation" : "new change"} snapshots the destination workspace at ${input.repo}; its working-copy commit and colocated Git index intent-to-add entries may change.`
     : undefined;
   const common = {
-    hostId: host.id, sessionId: input.sessionId, ...(clientId ? { clientId } : {}),
+    hostId: host.id, ...(clientId ? { clientId } : {}),
     repo: input.repo, existing, ...(commonDir ? { commonDir } : {}),
     label: existing ? "Open existing repository" : "Clone & Open",
     detail: [`Source ${url} → ${input.repo}. Only pushed history transfers; credentials stay on this machine.`, snapshotDetail].filter(Boolean).join(" "),
@@ -386,9 +400,9 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
 
 export const sameClonePlan = (a: ClonePlan, b: ClonePlan): boolean =>
   a.vcs === b.vcs && a.input.vcs === b.input.vcs &&
-  a.hostId === b.hostId && a.sessionId === b.sessionId && a.clientId === b.clientId &&
+  a.hostId === b.hostId && a.clientId === b.clientId &&
   a.repo === b.repo && a.existing === b.existing && a.commonDir === b.commonDir &&
-  a.input.repo === b.input.repo && a.input.sessionId === b.input.sessionId &&
+  a.input.repo === b.input.repo && sameSession(a.input.session, b.input.session) &&
   a.input.clientId === b.input.clientId && a.input.name === b.input.name &&
   a.input.worktreeName === b.input.worktreeName &&
   a.input.source.url === b.input.source.url && a.input.source.sourceHostId === b.input.source.sourceHostId &&
@@ -412,16 +426,16 @@ export const launchClone = Effect.fnUntraced(function*(input: CloneInput, comman
   if (!command[0] || !path.isAbsolute(command[0])) return yield* fail("The task executable must be an absolute path");
   const plan = yield* planClone(input, expectedHostId);
   if (reviewed && !sameClonePlan(reviewed, plan)) return yield* fail("Clone plan changed since review; inspect before submitting again");
+  const home = process.env.HOME;
+  if (!home || !path.isAbsolute(home)) return yield* fail("Target HOME must be an absolute directory");
   const request: CloneTaskRequest = {
-    plan,
+    plan, sessionId: plan.input.session.kind === "existing" ? plan.input.session.id : yield* createSession(plan.input.session.name),
     ...(process.env.REX_BIN_DIR ? { rexBinDir: process.env.REX_BIN_DIR } : {}),
     ...(process.env.REX_WORKTREES_LOCAL_ENDPOINT ? { rexLocalEndpoint: process.env.REX_WORKTREES_LOCAL_ENDPOINT } : {})
   };
-  const home = process.env.HOME;
-  if (!home || !path.isAbsolute(home)) return yield* fail("Target HOME must be an absolute directory");
-  const created = yield* createTab(plan.sessionId, input.name, home, [...command, "clone-task", JSON.stringify(request)]);
-  const warning = [plan.warning, yield* focus(plan.sessionId, created.windowId, plan.clientId, created.blockId)].filter(Boolean).join("; ") || undefined;
-  const result: CloneLaunchResult = { hostId: plan.hostId, sessionId: plan.sessionId, windowId: created.windowId, blockId: created.blockId, repo: plan.repo, pending: true, ...(warning ? { warning } : {}) };
+  const created = yield* createTab(request.sessionId, input.name, home, [...command, "clone-task", JSON.stringify(request)]);
+  const warning = [plan.warning, yield* focus(request.sessionId, created.windowId, plan.clientId, created.blockId)].filter(Boolean).join("; ") || undefined;
+  const result: CloneLaunchResult = { hostId: plan.hostId, sessionId: request.sessionId, windowId: created.windowId, blockId: created.blockId, repo: plan.repo, pending: true, ...(warning ? { warning } : {}) };
   return result;
 });
 
@@ -514,15 +528,16 @@ export const cloneTask = Effect.fnUntraced(function*(request: CloneTaskRequest) 
   }
   if (request.rexLocalEndpoint) process.env.REX_WORKTREES_LOCAL_ENDPOINT = request.rexLocalEndpoint;
   const { plan } = request;
-  if (process.env.REX_SESSION !== plan.sessionId || !process.env.REX_BLOCK) return yield* fail("Clone task must run in its requested Rex terminal");
+  if (process.env.REX_SESSION !== request.sessionId || !process.env.REX_BLOCK) return yield* fail("Clone task must run in its requested Rex terminal");
   const blockId = yield* Schema.decodeUnknownEffect(BlockIdSchema)(process.env.REX_BLOCK);
+  if (!(yield* listSessions).some(item => item.id === request.sessionId)) return yield* fail("Requested Rex session no longer exists");
   if (!sameClonePlan(plan, yield* planClone(plan.input, plan.hostId))) return yield* fail("Clone target changed since launch; destination left untouched");
   const { repo, cwd } = yield* prepareCloneCheckout(plan);
   yield* rememberCloneRoot((yield* Path.Path).dirname(repo.path)).pipe(Effect.catch(error =>
     Effect.sync(() => console.error(`Checkout ${cwd} is available; clone parent not remembered: ${Cause.pretty(Cause.fail(error))}`))));
-  const windows = yield* windowList(plan.sessionId).pipe(Effect.catch(() => Effect.succeed([])));
+  const windows = yield* windowList(request.sessionId).pipe(Effect.catch(() => Effect.succeed([])));
   const window = windows.find(entry => entry.layers.some(layer => layer.blocks?.some(block => block.block_id === blockId && block.host_id === plan.hostId)));
-  if (window) yield* saveAssociation({ vcs: repo.vcs, hostId: plan.hostId, commonDir: repo.commonDir, path: cwd, sessionId: plan.sessionId, windowId: window.window_id, blockId })
+  if (window) yield* saveAssociation({ vcs: repo.vcs, hostId: plan.hostId, commonDir: repo.commonDir, path: cwd, sessionId: request.sessionId, windowId: window.window_id, blockId })
     .pipe(Effect.catch(error => Effect.sync(() => console.error(`Checkout ${cwd} is available; association not saved: ${Cause.pretty(Cause.fail(error))}`))));
   else console.error(`Checkout ${cwd} is available; Rex block could not be associated`);
   yield* shell(cwd);

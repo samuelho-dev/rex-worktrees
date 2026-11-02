@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { Cause, Effect, Path, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexResizedSchema, RexTerminalSizeSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type PopupSize, type PopupSizer, type PopupBounds } from "./contracts.ts";
+import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexResizedSchema, RexTerminalSizeSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type PopupSize, type PopupSizer, type PopupBounds } from "./contracts.ts";
 import { run } from "./process.ts";
 const localName = hostname().toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
 export const localDirectoryUri = (raw: string): string | undefined => {
@@ -80,6 +80,10 @@ export const localHost = Effect.gen(function*() {
 export const listSessions = Effect.gen(function*() {
   const result = yield* parse(RexSessionsSchema, yield* rex(["ls", "--json"]));
   return result.sessions.map((session) => ({ id: session.session_id, label: session.label }));
+});
+export const createSession = Effect.fnUntraced(function*(name: string) {
+  const result = yield* parse(RexSessionCreatedSchema, yield* rex(["api", "call", "session.create", JSON.stringify({ label: name })]));
+  return result.session_id;
 });
 export const listClients = Effect.gen(function*() {
   const result = yield* parse(RexClientsSchema, yield* rex(["client", "ls", "--json"]));
@@ -225,9 +229,11 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
   const clientId = [sourceOwner, origin.clientId].find(id => id && clients.some(client => client.client_id === id));
   const popupCommand = clientId ? [...command, "--managed-popup", "--origin-client", clientId] : [...command, "--managed-popup"];
   const width = 0.68, height = 0.35; // ponytail: bootstrap only; the popup fits its own measured terminal after rendering
-  const args = { session_id: sessionId, window_id: windowId,
+  const args = {
+    session_id: sessionId, window_id: windowId,
     bounds: [(1 - width) / 2, (1 - height) / 2, width, height],
-    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), exit: { on_completion: true } } } }, focus: true };
+    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), exit: { on_completion: true } } } }, focus: true
+  };
   const created = yield* parse(RexLayerSchema, yield* localRex(["api", "call", "-s", sessionId, "session.new_layer", JSON.stringify(args)]));
   if (!created.layer_id || !created.block_ids?.some(Boolean)) return yield* Effect.fail(new AppError({ message: "Rex did not return a floating terminal layer" }));
   return created;

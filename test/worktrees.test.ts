@@ -759,8 +759,8 @@ it.live("clone checkout task keeps pushed branches and rejects unpushed, collidi
     const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
     const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
     const makePlan = (repo: string, branch: string, branchMode: GitClonePlan["input"]["branchMode"]): GitClonePlan => ({
-      vcs: "git", hostId, sessionId, repo, existing: false, label: "Clone & Open",
-      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main", "published", "unpushed"] }, repo, sessionId, name: "Task", branch, branchMode }
+      vcs: "git", hostId, repo, existing: false, label: "Clone & Open",
+      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main", "published", "unpushed"] }, repo, session: { kind: "existing", id: sessionId }, name: "Task", branch, branchMode }
     });
     const repo = join(root, "cloned");
     const prepared = yield* prepareCloneCheckout(makePlan(repo, "published", "existing"));
@@ -804,8 +804,8 @@ it.live("existing clone checkout pins repository identity and default origin bas
     const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
     const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
     const plan: GitClonePlan = {
-      vcs: "git", hostId, sessionId, repo, existing: true, commonDir: original.commonDir, base, label: "Open existing repository",
-      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main"] }, repo, sessionId, name: "Task", branch: "new-from-default", branchMode: "create" }
+      vcs: "git", hostId, repo, existing: true, commonDir: original.commonDir, base, label: "Open existing repository",
+      input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main"] }, repo, session: { kind: "existing", id: sessionId }, name: "Task", branch: "new-from-default", branchMode: "create" }
     };
     const prepared = yield* prepareCloneCheckout(plan);
     expect(git(prepared.cwd, "rev-parse", "HEAD").trim()).toBe(base);
@@ -840,13 +840,13 @@ it.live("JJ clone checkout creates a named workspace at a source-resolved publis
       const sessionId = Schema.decodeUnknownSync(SessionIdSchema)("fixture-session");
       const destination = join(root, "jj-target");
       const plan = {
-        vcs: "jj" as const, hostId, sessionId, repo: destination, existing: false, label: "Clone & Open",
+        vcs: "jj" as const, hostId, repo: destination, existing: false, label: "Clone & Open",
         input: {
           vcs: "jj" as const, source: {
             vcs: "jj" as const, url: bare, sourceHostId: hostId,
             revisions: [{ expression: revision.commitId, label: "base", revision }], revision
           },
-          repo: destination, sessionId, name: "Task", worktreeName: "fresh", revision: revision.commitId
+          repo: destination, session: { kind: "existing" as const, id: sessionId }, name: "Task", worktreeName: "fresh", revision: revision.commitId
         },
         base: revision
       };
