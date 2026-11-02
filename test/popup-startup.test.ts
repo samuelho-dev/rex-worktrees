@@ -218,39 +218,28 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
   }, 8000);
 }
 
-it("typed session with a duplicate existing label stays new through editor acceptance and explicit review", async () => {
-  await withPopup("session", async (pty) => {
-    await pty.waitForText("Existing checkout");
-    pty.write("\t\t\t\t\r");
-    await pty.waitForText("Session (select existing or type new name)");
-    pty.write("Same label\r");
-    await pty.waitForText("New: Same label");
-    expect(pty.output()).not.toContain("REVIEW_CALLED");
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x13");
-    await pty.waitForText("Review this action");
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x13");
-    expect(await pty.exited).toBe(0);
-    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"new","name":"Same label"}');
-  });
-}, 8000);
-
-it("duplicate session labels still select the exact second ID", async () => {
-  await withPopup("session", async (pty) => {
-    await pty.waitForText("Existing checkout");
-    pty.write("\t\t\t\t\r");
-    await pty.waitForText("Session (select existing or type new name)");
-    pty.write("\x1b[B\x1b[B\r");
-    await pty.waitForText(/SESSION\s+Same label/); // Wait for the form, not the ID already rendered in the editor's options.
-    expect(pty.output()).not.toContain("REVIEW_CALLED");
-    pty.write("\x13");
-    await pty.waitForText("Review this action");
-    pty.write("\x13");
-    expect(await pty.exited).toBe(0);
-    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"existing","id":"session-second"}');
-  });
-}, 8000);
+for (const [name, input, frame, selection] of [
+  ["typed session with a duplicate existing label stays new through editor acceptance and explicit review", "Same label\r", "New: Same label", { kind: "new", name: "Same label" }],
+  ["duplicate session labels still select the exact second ID", "\x1b[B\x1b[B\r", /SESSION\s+Same label/, { kind: "existing", id: "session-second" }]
+] as const) {
+  it(name, async () => {
+    await withPopup("session", async (pty) => {
+      await pty.waitForText("Existing checkout");
+      pty.write("\t\t\t\t\r");
+      await pty.waitForText("Session (select existing or type new name)");
+      pty.write(input);
+      await pty.waitForText(frame); // Wait for the form, not an option already rendered in the editor.
+      expect(pty.output()).not.toContain("REVIEW_CALLED");
+      expect(pty.output()).not.toContain("LAUNCH_CALLED");
+      pty.write("\x13");
+      await pty.waitForText("Review this action");
+      expect(pty.output()).not.toContain("LAUNCH_CALLED");
+      pty.write("\x13");
+      expect(await pty.exited).toBe(0);
+      expect(pty.output()).toContain(`LAUNCH_CALLED ${JSON.stringify(selection)}`);
+    });
+  }, 8000);
+}
 
 for (const [kind, diagnostic] of [
   ["collision", "Clone destination already exists and is not a repository"],

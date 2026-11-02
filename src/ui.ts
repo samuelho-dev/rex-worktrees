@@ -806,7 +806,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             draft = { ...draft, clientId: focusClient(found.clients) }
             const picked = yield* inputChoice({
               message: "Session (select existing or type new name)",
-              choices: sessions.map(item => selected(item.id, draft.session?.kind === "existing" && item.id === draft.session.id, item.label, item.id))
+              choices: sessions.map(item => ({ value: item.id, title: item.label, description: item.id }))
             })
             draft = { ...draft, session: picked.kind === "selected" ? { kind: "existing", id: picked.value } : { kind: "new", name: picked.text } }
           } else if (action === "mode") {
