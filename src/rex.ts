@@ -102,8 +102,9 @@ export const originDirectory = Effect.fnUntraced(function*(sessionId: SessionId,
     layer.blocks?.some((block) => block.block_id === blockId && block.host_id === host.id)))) return undefined;
   const raw = yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "pwd"]);
   const result = yield* parse(RexDirectorySchema, raw);
-  if (result.pwd) return localDirectoryUri(result.pwd);
-  // ponytail: inspect only this verified pane's foreground when Rex has no reported directory.
+  const directory = result.pwd ? localDirectoryUri(result.pwd) : undefined;
+  if (directory !== undefined) return directory;
+  // ponytail: a rejected or missing pane URI falls back only to this verified pane's foreground cwd.
   const processInfo = yield* parse(RexProcessSchema, yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "process"]));
   const cwd = processInfo.foreground?.cwd;
   return cwd?.startsWith("/") && !cwd.includes("\0") ? cwd : undefined;
