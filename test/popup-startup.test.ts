@@ -64,6 +64,7 @@ async function withPopup(
     import * as Effect from ${JSON.stringify(effect)};
     import * as BunRuntime from ${JSON.stringify(runtime)};
     import * as BunServices from ${JSON.stringify(services)};
+    import { mock } from "bun:test";
     ${kind !== "pending" && kind !== "failure" ? `
       const scenario = ${JSON.stringify(kind)};
       const { AppError } = await import(${JSON.stringify(pathToFileURL(resolve(root, "src/contracts.ts")).href)});
@@ -239,7 +240,7 @@ for (const [kind, diagnostic] of [
       pty.write("\x13");
       await pty.waitForText(diagnostic);
       expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-      pty.write("\t\r"); // Destination field from focused Machine.
+      pty.write("\t\t\t\t\r"); // Review leaves Submit focused; wrap through Cancel, Project, Machine to Destination.
       await pty.waitForText("Clone destination: type absolute path");
       pty.write("/safe/alpha\r");
       await pty.waitForText("Destination: /safe/alpha");
