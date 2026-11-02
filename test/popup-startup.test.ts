@@ -77,6 +77,10 @@ async function withPopup(
           roots: ["/projects"], cloneRoot: "/projects" }),
         inspectProject: () => Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main"], revisions: [] }),
         inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main"], revisions: [] }),
+        inspectRevision: () => Effect.die("Unexpected revision helper"),
+        sourceForClone: () => Effect.die("Unexpected clone source helper"),
+        reviewClone: () => Effect.die("Unexpected clone review helper"),
+        submitClone: () => Effect.die("Unexpected clone launch helper"),
         review: (_, __, input) => Effect.sync(() => { process.stderr.write("REVIEW_CALLED\\n");
           return { vcs: "git", input, hostId: host.hostId, sessionId: input.sessionId,
             path: project.path, action: "new-tab", checkout: "existing", branch: "main",
@@ -134,6 +138,8 @@ async function withPopup(
       exitCode: () => proc.exitCode,
       exited: proc.exited,
     });
+  } catch (error) {
+    throw new Error(`Popup PTY failed; captured output:\n${output}`, { cause: error });
   } finally {
     if (proc.exitCode === null) proc.kill();
     await proc.exited;
