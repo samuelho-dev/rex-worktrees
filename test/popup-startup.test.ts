@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "changed",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "changed" | "jj" | "detached" | "long",
   run: (pty: {
     output: () => string;
     waitForText: (text: string | RegExp, from?: number) => Promise<void>;
@@ -70,8 +70,16 @@ async function withPopup(
       const host = { key: "local", selector: "local", label: "This machine", local: true, hostId: "host-local" };
       const remote = { key: "remote", selector: "remote", label: "Remote machine", local: false, hostId: "host-remote" };
       const name = scenario === "unsafe" ? "alpha\\\\name" : "alpha";
-      const project = { vcs: "git", path: "/projects/" + name, commonDir: "/git/alpha", name };
-      const checkout = { vcs: "git", path: project.path, branch: "main", head: "abc", bare: false, locked: false, prunable: false };
+      const project = scenario === "jj"
+        ? { vcs: "jj", path: "/projects/alpha", commonDir: "/projects/alpha/.jj/repo", name }
+        : { vcs: "git", path: scenario === "long" ? "/projects/" + "nested/".repeat(35) + "alpha" : "/projects/" + name, commonDir: "/git/alpha", name };
+      const checkout = scenario === "jj"
+        ? { vcs: "jj", path: project.path, name, head: "a".repeat(40), changeId: "k".repeat(32), present: true, colocated: false }
+        : { vcs: "git", path: project.path, branch: "main", head: "abc", bare: false, locked: false, prunable: false };
+      const revisions = scenario === "jj" ? [
+        { expression: "trunk()", label: "trunk()", revision: { commitId: "a".repeat(40), changeId: "k".repeat(32), description: "mainline" } },
+        { expression: "candidate", label: "candidate", revision: { commitId: "b".repeat(40), changeId: "m".repeat(32), description: "alternate" } }
+      ] : [];
       let reviewCount = 0;
       mock.module(${JSON.stringify(client)}, () => ({
         listMachines: Effect.succeed(scenario === "edit" || scenario === "unsafe" ? [host] : [host, remote]),
@@ -83,12 +91,12 @@ async function withPopup(
             : [{ id: "session-local", label: "Session" }], clients: [],
           roots: ["/clones"], cloneRoot: "/clones" }),
         inspectProject: (_, __, path) => path === project.path
-          ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main", "feature/free"], revisions: [] })
+          ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main", "feature/free"], revisions })
           : Effect.fail(new AppError({ message: "Not a repository: " + path })),
-        inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main", "feature/free"], revisions: [] }),
+        inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main", "feature/free"], revisions }),
         inspectRevision: () => Effect.die("Unexpected revision helper"),
         sourceForClone: () => Effect.succeed({ vcs: "git", url: "https://example.test/alpha.git",
-          sourceHostId: host.hostId, branches: ["main"], branch: "main" }),
+          sourceHostId: host.hostId, branches: ["main"], ...(scenario === "detached" ? {} : { branch: "main" }) }),
         reviewClone: (_, __, input) => {
           process.stderr.write("REVIEW_CLONE " + input.repo + "\\n");
           process.stderr.write("CLONE_INPUT " + JSON.stringify(input) + "\\n");
@@ -103,9 +111,10 @@ async function withPopup(
         review: (_, __, input) => Effect.sync(() => {
           process.stderr.write("REVIEW_CALLED " + JSON.stringify(input) + "\\n");
           const path = scenario === "changed" && ++reviewCount > 1 ? "/projects/alpha.changed" : project.path;
-          return { vcs: "git", input, hostId: host.hostId,
+          return { vcs: input.vcs, input, hostId: host.hostId,
             path, action: "new-tab", checkout: input.path ? "existing" : "create",
-            branch: input.branch ?? "main", nameRole: "tab", name: input.name,
+            ...(input.vcs === "git" ? { branch: input.branch ?? "main" } : {}),
+            nameRole: "tab", name: input.name,
             label: input.path ? "Open reviewed checkout" : "Create checkout & open" };
         }),
         submit: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + " " + plan.path + "\\n");
@@ -120,7 +129,8 @@ async function withPopup(
       ? 'Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => process.stderr.write("DISCOVERY_INTERRUPTED"))))'
       : kind === "failure" ? 'Effect.fail(new Error("synthetic startup failure"))'
         : kind === "unsafe" ? 'Effect.succeed("/projects/alpha\\\\name")'
-          : 'Effect.succeed("/projects/alpha")'
+          : kind === "long" ? 'Effect.succeed("/projects/" + "nested/".repeat(35) + "alpha")'
+            : 'Effect.succeed("/projects/alpha")'
     };
     BunRuntime.runMain(Effect.provide(popup([], context), BunServices.layer));
   `;
@@ -130,8 +140,8 @@ async function withPopup(
     cwd: root,
     env,
     terminal: {
-      cols: 96,
-      rows: 24,
+      cols: kind === "long" ? 60 : 96,
+      rows: kind === "long" ? 18 : 24,
       data: (_, bytes) => {
         output += new TextDecoder().decode(bytes);
         for (const listener of listeners) listener();
@@ -205,6 +215,7 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
   it(`project editor ${key} accepts an exact inspected checkout without reviewing or launching`, async () => {
     await withPopup("edit", async (pty) => {
       await pty.waitForText(/CHECKOUT\s+alpha/);
+      await pty.waitForText("Esc close");
       pty.write("\r");
       await pty.waitForText("Project (select known");
       const before = pty.output().length;
@@ -229,6 +240,7 @@ for (const [name, input, frame, selection, needsReview] of [
   it(name, async () => {
     await withPopup("session", async (pty) => {
       await pty.waitForText(/CHECKOUT\s+alpha/);
+      await pty.waitForText("Esc close");
       pty.write("\t\t\t\r");
       await pty.waitForText("Session (select existing or type new name)");
       pty.write(input);
@@ -250,6 +262,7 @@ for (const [name, input, frame, selection, needsReview] of [
 it("typing an occupied Git branch opens its exact existing checkout", async () => {
   await withPopup("edit", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     pty.write("\t\t\r");
     await pty.waitForText("Checkout (");
     const before = pty.output().length;
@@ -266,8 +279,9 @@ it("typing an occupied Git branch opens its exact existing checkout", async () =
 it("typed Git branch uses a separate optional directory name and requires review", async () => {
   await withPopup("edit", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     expect(pty.output()).toContain("OPTIONS");
-    expect(pty.output()).not.toContain("DIRECTORY NAME");
+    expect(pty.output()).not.toContain("  DIRECTORY  ");
     expect(pty.output()).not.toContain("MODE");
     pty.write("\t\t\r");
     await pty.waitForText("Checkout (");
@@ -275,11 +289,11 @@ it("typed Git branch uses a separate optional directory name and requires review
     await pty.waitForText(/CHECKOUT\s+feature\/free/);
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\t\t\r");
-    await pty.waitForText("DIRECTORY NAME");
+    await pty.waitForText(/DIRECTORY\s+Default/);
     pty.write("\t\r");
     await pty.waitForText("Optional custom checkout directory name");
     pty.write("custom-tree\r");
-    await pty.waitForText(/DIRECTORY NAME\s+custom-tree/);
+    await pty.waitForText(/DIRECTORY\s+custom-tree/);
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x13");
     await pty.waitForText("Review this action");
@@ -295,26 +309,98 @@ it("typed Git branch uses a separate optional directory name and requires review
 it("a changed reviewed target is displayed and needs another explicit confirmation", async () => {
   await withPopup("changed", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     pty.write("\t\t\r");
     await pty.waitForText("Checkout (");
     pty.write("feature/free\r");
     await pty.waitForText(/CHECKOUT\s+feature\/free/);
+    const beforeReview = pty.output().length;
     pty.write("\x13");
-    await pty.waitForText("Review this action");
+    await pty.waitForText("Esc close", beforeReview);
+    expect(pty.output()).toContain("Review this action");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    const beforeChange = pty.output().length;
     pty.write("\x13");
-    await pty.waitForText("Destination or Rex target changed");
+    await pty.waitForText("Esc close", beforeChange);
+    const displayed = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    expect(displayed).toContain("Destination or Rex target changed");
+    expect(displayed).toContain("Destination: /projects/alpha.changed");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\x13");
     expect(await pty.exited).toBe(0);
     expect(pty.output()).toContain("LAUNCH_CALLED");
-    expect(pty.output()).toContain("/projects/alpha.changed");
+  });
+}, 8000);
+
+it("a new JJ workspace retains its name when the starting revision changes", async () => {
+  await withPopup("jj", async (pty) => {
+    await pty.waitForText(/WORKSPACE\s+alpha/);
+    await pty.waitForText("Esc close");
+    pty.write("\t\t\r");
+    await pty.waitForText("Workspace (select existing");
+    pty.write("task-space\r");
+    await pty.waitForText(/WORKSPACE\s+task-space/);
+    expect(pty.output()).toContain("START FROM");
+    pty.write("\t\t\r");
+    await pty.waitForText("Start from revision for new workspace");
+    pty.write("candidate\x1b[B\r");
+    await pty.waitForText(/START FROM\s+candidate/);
+    const currentFrame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    expect(currentFrame).toMatch(/WORKSPACE\s+task-space/);
+    pty.write("\x13");
+    await pty.waitForText("REVIEW_CALLED");
+    expect(pty.output()).toContain('"worktreeName":"task-space"');
+    expect(pty.output()).toContain('"revision":"' + "b".repeat(40) + '"');
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
+it("a detached clone exposes required Branch without expanding Options", async () => {
+  await withPopup("detached", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
+    pty.write("\t\r");
+    await pty.waitForText("Execution machine");
+    pty.write("\x1b[B\r");
+    await pty.waitForText(/CLONE TO\s+\/clones\/alpha/);
+    await pty.waitForText("Esc close");
+    expect(pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"))).toMatch(/BRANCH\s+Select or type branch/);
+    pty.write("\t\r");
+    await pty.waitForText("Clone to (absolute destination");
+    pty.write("/safe/alpha\r");
+    await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
+    pty.write("\t\t\r");
+    await pty.waitForText("Branch (select source branch");
+    const beforeBranch = pty.output().length;
+    pty.write("\x1b[B\r");
+    await pty.waitForText("Esc close", beforeBranch);
+    pty.write("\x13");
+    await pty.waitForText("CLONE_INPUT");
+    expect(pty.output()).toContain('"branch":"main"');
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
+it("a clamped long checkout path needs review before opening", async () => {
+  await withPopup("long", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
+    pty.write("\x13");
+    await pty.waitForText("REVIEW_CALLED");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
   });
 }, 8000);
 
 it("clone path editor cannot launch; optional checkout name remains independent", async () => {
   await withPopup("collision", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     pty.write("\t\r");
     await pty.waitForText("Execution machine");
     pty.write("\x1b[B\r");
@@ -326,20 +412,20 @@ it("clone path editor cannot launch; optional checkout name remains independent"
     expect(pty.output()).not.toContain("REVIEW_CLONE");
     expect(pty.output()).not.toContain("CLONE_LAUNCHED");
     pty.write("\t\t\r");
-    await pty.waitForText("DIRECTORY NAME");
+    await pty.waitForText(/DIRECTORY\s+Default/);
     pty.write("\t\r");
     await pty.waitForText("Optional custom checkout directory name");
     pty.write("separate-checkout\r");
-    await pty.waitForText(/DIRECTORY NAME\s+separate-checkout/);
+    await pty.waitForText(/DIRECTORY\s+separate-checkout/);
     pty.write("\r");
     await pty.waitForText("Optional custom checkout directory name");
     const beforeClear = pty.output().length;
     pty.write("Use default\x1b[B\r");
-    await pty.waitForText(/DIRECTORY NAME\s+Default/, beforeClear);
+    await pty.waitForText(/DIRECTORY\s+Default/, beforeClear);
     pty.write("\r");
     await pty.waitForText("Optional custom checkout directory name");
     pty.write("separate-checkout\r");
-    await pty.waitForText(/DIRECTORY NAME\s+separate-checkout/);
+    await pty.waitForText(/DIRECTORY\s+separate-checkout/);
     expect(pty.output()).toContain("/safe/alpha");
     pty.write("\x13");
     await pty.waitForText("CLONE_INPUT");
@@ -359,6 +445,7 @@ for (const [kind, diagnostic] of [
   it(`clone destination remains a literal editable path after ${kind} review failure`, async () => {
     await withPopup(kind, async (pty) => {
       await pty.waitForText(/CHECKOUT\s+alpha/);
+      await pty.waitForText("Esc close");
       pty.write("\t\r");
       await pty.waitForText("Execution machine");
       pty.write("\x1b[B\r");
@@ -384,6 +471,7 @@ for (const [kind, diagnostic] of [
 it("existing checkout with backslash basename can open clone chooser and accept an absolute override", async () => {
   await withPopup("unsafe", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     pty.write("\t\t\r");
     await pty.waitForText("Clone this project");
     expect(pty.output()).not.toContain("Could not open worktrees");
@@ -400,6 +488,7 @@ it("existing checkout with backslash basename can open clone chooser and accept 
 it("machine field acceptance preserves the new connection error", async () => {
   await withPopup("connect", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
     pty.write("\t\r");
     await pty.waitForText("Execution machine");
     pty.write("\x1b[B\r");

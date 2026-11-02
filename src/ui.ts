@@ -28,7 +28,7 @@ export const renderFormFrame = (view: FormView, focused: FormField, editing: boo
   add(heading)
   screen.push(line("├", "┤"))
   // ponytail: reserve exactly the editor's four/six rows at this terminal height.
-  const budget = Math.max(0, rows - (editing ? rows >= 20 ? 11 : 9 : 7))
+  const budget = Math.max(0, rows - (editing ? rows >= 20 ? 10 : 8 : 7))
   const body: string[] = []
   const addBody = (text: string) => body.push(border(fit(text, inside)))
   const addWrapped = (text: string, tone: Color, limit = budget) => {
@@ -516,7 +516,8 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           },
           {
             id: "destination", label: draft.clone ? "Clone to" : draft.project?.vcs === "jj" ? "Workspace" : "Checkout",
-            value: draft.clone?.repo ?? draft.destination?.label ?? (draft.project?.vcs === "jj" ? draft.worktreeName : undefined) ??
+            value: draft.clone?.repo ?? (draft.project?.vcs === "jj" && !draft.destination?.path ? draft.worktreeName : undefined) ??
+              draft.destination?.label ??
               (draft.project?.vcs === "jj" ? "Choose workspace or type new name" : "Choose checkout or type branch"),
             detail: draft.clone?.repo ?? draft.destination?.path,
             disabled: !draft.host || !(draft.project || draft.clone)
@@ -525,23 +526,29 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             id: "session", label: "Session", value: draft.session?.kind === "new" ? `New: ${draft.session.name}`
               : sessions.find(s => s.id === (draft.session?.kind === "existing" ? draft.session.id : undefined))?.label ?? (draft.session?.kind === "existing" ? draft.session.id : "Choose or type new session"),
             detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on confirmation" : undefined, disabled: !draft.host
-          },
-          { id: "options", label: "Options", value: optionsExpanded ? "Hide options ↑" : "Show options ↓" }
+          }
         ]
-        if (draft.project?.vcs === "jj" && !draft.destination?.path || optionsExpanded && draft.clone?.vcs === "jj")
+        if (draft.project?.vcs === "jj" && !draft.destination?.path)
           rows.push({
             id: "branch", label: "Start from",
-            value: draft.destination?.revision ? draft.destination.label : draft.clone ? "Cloned default" : "Select or type revision",
-            disabled: !draft.host || !(draft.project || draft.clone) || (!!draft.project && !draft.clone && !draft.worktreeName)
+            value: draft.destination?.revision ? draft.destination.label : "Select or type revision",
+            disabled: !draft.host || !draft.worktreeName
           })
+        if (draft.clone?.vcs === "git" && !draft.destination?.branch)
+          rows.push({ id: "branch", label: "Branch", value: "Select or type branch", disabled: !draft.host })
+        rows.push({ id: "options", label: "Options", value: optionsExpanded ? "Hide options ↑" : "Show options ↓" })
         if (optionsExpanded) {
           if (draft.clone || draft.project?.vcs === "git") rows.push({
-            id: "checkoutName", label: draft.clone?.vcs === "jj" ? "Workspace name" : "Directory name",
+            id: "checkoutName", label: draft.clone?.vcs === "jj" ? "Workspace" : "Directory",
             value: draft.worktreeName ?? (draft.clone?.vcs === "jj" ? "Use cloned default workspace" : "Default (derived from branch)"),
             disabled: !draft.host || !(draft.project || draft.clone) || !!draft.destination?.path && !draft.clone
           })
-          if (draft.clone?.vcs === "git") rows.push({
-            id: "branch", label: "Branch", value: draft.destination?.branch ?? "Select or type branch",
+          if (draft.clone?.vcs === "git" && draft.destination?.branch) rows.push({
+            id: "branch", label: "Branch", value: draft.destination.branch,
+            disabled: !draft.host
+          })
+          if (draft.clone?.vcs === "jj") rows.push({
+            id: "branch", label: "Start from", value: draft.destination?.revision ? draft.destination.label : "Cloned default",
             disabled: !draft.host
           })
           if (!draft.clone) rows.push({
@@ -625,7 +632,8 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           if (!plan) {
             const safeOpen = !!draft.destination?.path && draft.session?.kind === "existing" &&
               current.success.checkout === "existing" && current.success.path === draft.destination.path &&
-              !current.success.detail && !current.success.warning
+              !current.success.detail && !current.success.warning && !view.fitWarning &&
+              naturalFormRows(view, yield* terminal.columns) + 3 <= (yield* terminal.rows)
             plan = current.success
             if (!safeOpen) { error = undefined; continue }
           }

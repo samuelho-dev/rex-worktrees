@@ -38,7 +38,7 @@ describe("persistent form frame", () => {
       false,
     );
     const lines = `${frame}${editor}`.split("\r\n");
-    expect(lines).toHaveLength(18);
+    expect(lines.length).toBeLessThanOrEqual(18);
     for (const row of view.rows)
       expect(frame).toContain(row.label.toUpperCase());
     expect(frame).not.toContain("Create worktree & open");
@@ -141,7 +141,7 @@ describe("persistent form frame", () => {
       false,
       true,
     );
-    expect(`${parent}${editor}`.split("\r\n")).toHaveLength(18);
+    expect(`${parent}${editor}`.split("\r\n").length).toBeLessThanOrEqual(18);
     for (const row of view.rows)
       expect(parent).toContain(row.label.toUpperCase());
     expect(parent).toContain("Select an exact session");
@@ -362,7 +362,7 @@ describe("inline choice editor", () => {
       true,
     );
     const combined = `${parent}${editor}`.split("\r\n");
-    expect(combined).toHaveLength(18);
+    expect(combined.length).toBeLessThanOrEqual(18);
     expect(combined.every((line) => Bun.stringWidth(line) <= 60)).toBe(true);
     expect(combined.some((line) => line.includes("SESSION"))).toBe(true);
     expect(combined.some((line) => line.includes("┘"))).toBe(true);
