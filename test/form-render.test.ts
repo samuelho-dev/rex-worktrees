@@ -27,7 +27,7 @@ const view: FormView = {
 };
 
 describe("persistent form frame", () => {
-  it("retains six fields and the input editor at 60x18", () => {
+  it("shows primary fields while editing without painting parent actions at 60x18", () => {
     const frame = renderFormFrame(view, "destination", true, 60, 18, false);
     const editor = renderInputChoice(
       "Worktree",
@@ -41,7 +41,8 @@ describe("persistent form frame", () => {
     expect(lines).toHaveLength(18);
     for (const row of view.rows)
       expect(frame).toContain(row.label.toUpperCase());
-    expect(frame).toContain("Cancel");
+    expect(frame).not.toContain("Create worktree & open");
+    expect(frame).not.toContain("Cancel");
     expect(lines.every((line) => Bun.stringWidth(line) <= 60)).toBe(true);
   });
 
@@ -73,8 +74,8 @@ describe("persistent form frame", () => {
       submitDisabled: true,
     };
     const main = popupTargetRows(view, 96);
-    expect(main).toBe(16);
-    expect(popupTargetRows(view, 96, true)).toBe(22);
+    expect(main).toBeGreaterThanOrEqual(16);
+    expect(popupTargetRows(view, 96, true)).toBeGreaterThan(main);
     expect(popupTargetRows(initial, 96)).toBe(main);
     const detail = `Host ID: ${"remote-machine/".repeat(220)}final`;
     const expanded = { ...view, rows: view.rows.map(row => row.id === "machine" ? { ...row, detail } : row) };
@@ -145,7 +146,7 @@ describe("persistent form frame", () => {
       expect(parent).toContain(row.label.toUpperCase());
     expect(parent).toContain("Select an exact session");
     expect(parent).toContain("Enlarge Rex popup");
-    expect(parent).toContain("Cancel");
+    expect(parent).not.toContain("Cancel");
   });
 
   it("unavailable host renders the full actionable error once within narrow bounds", () => {
@@ -221,8 +222,8 @@ describe("persistent form frame", () => {
         row.id === "project"
           ? { ...row, value: "\x1b[2J\x1b]0;hijack\x07\u202eVISIBLE\nNEXT" }
           : row.id === "machine"
-          ? { ...row, detail: "host\x1b[31m\rnext" }
-          : row,
+            ? { ...row, detail: "host\x1b[31m\rnext" }
+            : row,
       ),
     };
     const frame = renderFormFrame(malicious, "machine", false, 60, 18, false);

@@ -40,10 +40,10 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "changed",
   run: (pty: {
     output: () => string;
-    waitForText: (text: string | RegExp) => Promise<void>;
+    waitForText: (text: string | RegExp, from?: number) => Promise<void>;
     write: (input: string) => void;
     exitCode: () => number | null;
     exited: Promise<number>;
@@ -72,6 +72,7 @@ async function withPopup(
       const name = scenario === "unsafe" ? "alpha\\\\name" : "alpha";
       const project = { vcs: "git", path: "/projects/" + name, commonDir: "/git/alpha", name };
       const checkout = { vcs: "git", path: project.path, branch: "main", head: "abc", bare: false, locked: false, prunable: false };
+      let reviewCount = 0;
       mock.module(${JSON.stringify(client)}, () => ({
         listMachines: Effect.succeed(scenario === "edit" || scenario === "unsafe" ? [host] : [host, remote]),
         connectMachine: machine => scenario === "connect" && machine.key === "remote"
@@ -82,14 +83,15 @@ async function withPopup(
             : [{ id: "session-local", label: "Session" }], clients: [],
           roots: ["/clones"], cloneRoot: "/clones" }),
         inspectProject: (_, __, path) => path === project.path
-          ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main"], revisions: [] })
+          ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main", "feature/free"], revisions: [] })
           : Effect.fail(new AppError({ message: "Not a repository: " + path })),
-        inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main"], revisions: [] }),
+        inspectWorktrees: () => Effect.succeed({ worktrees: [checkout], branches: ["main", "feature/free"], revisions: [] }),
         inspectRevision: () => Effect.die("Unexpected revision helper"),
         sourceForClone: () => Effect.succeed({ vcs: "git", url: "https://example.test/alpha.git",
           sourceHostId: host.hostId, branches: ["main"], branch: "main" }),
         reviewClone: (_, __, input) => {
           process.stderr.write("REVIEW_CLONE " + input.repo + "\\n");
+          process.stderr.write("CLONE_INPUT " + JSON.stringify(input) + "\\n");
           return input.repo === "/clones/alpha"
             ? Effect.fail(new AppError({ message: scenario === "permission"
               ? "Cannot write clone destination parent: " + input.repo
@@ -98,12 +100,16 @@ async function withPopup(
               repo: input.repo, existing: false, label: "Clone & Open", detail: "Destination: " + input.repo });
         },
         submitClone: () => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED\\n"); return { sessionId: "session-local", repo: "/safe/alpha" }; }),
-        review: (_, __, input) => Effect.sync(() => { process.stderr.write("REVIEW_CALLED\\n");
+        review: (_, __, input) => Effect.sync(() => {
+          process.stderr.write("REVIEW_CALLED " + JSON.stringify(input) + "\\n");
+          const path = scenario === "changed" && ++reviewCount > 1 ? "/projects/alpha.changed" : project.path;
           return { vcs: "git", input, hostId: host.hostId,
-            path: project.path, action: "new-tab", checkout: "existing", branch: "main",
-            nameRole: "tab", name: input.name, label: "Open reviewed checkout", detail: "Destination: " + project.path }; }),
-        submit: (_, __, input) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + "\\n");
-          return { sessionId: input.session.kind === "new" ? "created-id" : input.session.id, path: project.path, action: "new-tab", pending: false }; })
+            path, action: "new-tab", checkout: input.path ? "existing" : "create",
+            branch: input.branch ?? "main", nameRole: "tab", name: input.name,
+            label: input.path ? "Open reviewed checkout" : "Create checkout & open" };
+        }),
+        submit: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + " " + plan.path + "\\n");
+          return { sessionId: input.session.kind === "new" ? "created-id" : input.session.id, path: plan.path, action: "new-tab", pending: false }; })
       }));
       const originalRex = await import(${JSON.stringify(rex)});
       mock.module(${JSON.stringify(rex)}, () => ({ ...originalRex, makePopupSizer: Effect.succeed(() => Effect.succeed(undefined)) }));
@@ -135,9 +141,9 @@ async function withPopup(
   try {
     await run({
       output: () => output,
-      waitForText: (text) =>
+      waitForText: (text, from = 0) =>
         waitFor(
-          () => typeof text === "string" ? output.includes(text) : text.test(output),
+          () => typeof text === "string" ? output.slice(from).includes(text) : text.test(output.slice(from)),
           (notify) => {
             listeners.add(notify);
             return () => {
@@ -165,7 +171,7 @@ for (const [name, input] of [
 ]) {
   it(`initial form ${name} interrupts discovery without starting a task`, async () => {
     await withPopup("pending", async (pty) => {
-      await pty.waitForText("MODE");
+      await pty.waitForText("OPTIONS");
       expect(pty.exitCode()).toBeNull();
       pty.write(input);
       expect(await pty.exited).toBe(0);
@@ -176,8 +182,8 @@ for (const [name, input] of [
 
 it("initial form submit stays disabled while discovery runs and Esc still cancels", async () => {
   await withPopup("pending", async (pty) => {
-    await pty.waitForText("MODE");
-    pty.write("\t\t\t\t\t\t\r"); // Project through six fields to submit; Enter cannot launch.
+    await pty.waitForText("OPTIONS");
+    pty.write("\x13");
     expect(pty.exitCode()).toBeNull();
     pty.write("\x1b");
     expect(await pty.exited).toBe(0);
@@ -196,73 +202,178 @@ it("fatal startup error remains visible until acknowledgement and exits nonzero"
 }, 8000);
 
 for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
-  it(`editor ${key} accepts a field without reviewing or launching; form submission reviews then launches once`, async () => {
+  it(`project editor ${key} accepts an exact inspected checkout without reviewing or launching`, async () => {
     await withPopup("edit", async (pty) => {
-      await pty.waitForText("Existing checkout");
-      pty.write("\t\t\t\t\t\r"); // Select Mode from the form.
-      await pty.waitForText("Open mode");
-      pty.write(`\x1b[B${accept}`); // Choose Always new tab and accept from the editor.
-      await pty.waitForText(/MODE\s+Always new tab/);
+      await pty.waitForText(/CHECKOUT\s+alpha/);
+      pty.write("\r");
+      await pty.waitForText("Project (select known");
+      const before = pty.output().length;
+      pty.write(`\x1b[B${accept}`);
+      await pty.waitForText(/CHECKOUT\s+alpha/, before);
       expect(pty.exitCode()).toBeNull();
       expect(pty.output()).not.toContain("REVIEW_CALLED");
       expect(pty.output()).not.toContain("LAUNCH_CALLED");
-      pty.write("\x13"); // Explicit form submission produces a review, not a launch.
-      await pty.waitForText("Review this action");
-      expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
-      expect(pty.output()).not.toContain("LAUNCH_CALLED");
-      pty.write("\x13"); // Second explicit submission confirms the reviewed action.
+      pty.write("\x13");
       expect(await pty.exited).toBe(0);
-      expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(2);
+      expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
+      expect(pty.output()).toContain('"path":"/projects/alpha"');
       expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
     });
   }, 8000);
 }
 
-for (const [name, input, frame, selection] of [
-  ["typed session with a duplicate existing label stays new through editor acceptance and explicit review", "Same label\r", "New: Same label", { kind: "new", name: "Same label" }],
-  ["duplicate session labels still select the exact second ID", "\x1b[B\x1b[B\r", /SESSION\s+Same label/, { kind: "existing", id: "session-second" }]
+for (const [name, input, frame, selection, needsReview] of [
+  ["typed session matching an existing label stays new", "Same label\r", "New: Same label", { kind: "new", name: "Same label" }, true],
+  ["duplicate labels select the exact second session ID", "\x1b[B\x1b[B\r", /SESSION\s+Same label/, { kind: "existing", id: "session-second" }, false]
 ] as const) {
   it(name, async () => {
     await withPopup("session", async (pty) => {
-      await pty.waitForText("Existing checkout");
-      pty.write("\t\t\t\t\r");
+      await pty.waitForText(/CHECKOUT\s+alpha/);
+      pty.write("\t\t\t\r");
       await pty.waitForText("Session (select existing or type new name)");
       pty.write(input);
-      await pty.waitForText(frame); // Wait for the form, not an option already rendered in the editor.
+      await pty.waitForText(frame);
       expect(pty.output()).not.toContain("REVIEW_CALLED");
       expect(pty.output()).not.toContain("LAUNCH_CALLED");
       pty.write("\x13");
-      await pty.waitForText("Review this action");
-      expect(pty.output()).not.toContain("LAUNCH_CALLED");
-      pty.write("\x13");
+      if (needsReview) {
+        await pty.waitForText("Review this action");
+        expect(pty.output()).not.toContain("LAUNCH_CALLED");
+        pty.write("\x13");
+      }
       expect(await pty.exited).toBe(0);
       expect(pty.output()).toContain(`LAUNCH_CALLED ${JSON.stringify(selection)}`);
     });
   }, 8000);
 }
 
+it("typing an occupied Git branch opens its exact existing checkout", async () => {
+  await withPopup("edit", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    pty.write("\t\t\r");
+    await pty.waitForText("Checkout (");
+    const before = pty.output().length;
+    pty.write("main\r");
+    await pty.waitForText(/CHECKOUT\s+alpha/, before);
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain('"path":"/projects/alpha"');
+    expect(pty.output()).not.toContain('"branch":"main","worktreeName"');
+  });
+}, 8000);
+
+it("typed Git branch uses a separate optional directory name and requires review", async () => {
+  await withPopup("edit", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    expect(pty.output()).toContain("OPTIONS");
+    expect(pty.output()).not.toContain("DIRECTORY NAME");
+    expect(pty.output()).not.toContain("MODE");
+    pty.write("\t\t\r");
+    await pty.waitForText("Checkout (");
+    pty.write("feature/free\r");
+    await pty.waitForText(/CHECKOUT\s+feature\/free/);
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\t\t\r");
+    await pty.waitForText("DIRECTORY NAME");
+    pty.write("\t\r");
+    await pty.waitForText("Optional custom checkout directory name");
+    pty.write("custom-tree\r");
+    await pty.waitForText(/DIRECTORY NAME\s+custom-tree/);
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    pty.write("\x13");
+    await pty.waitForText("Review this action");
+    expect(pty.output()).toContain('"branch":"feature/free"');
+    expect(pty.output()).toContain('"worktreeName":"custom-tree"');
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
+  });
+}, 8000);
+
+it("a changed reviewed target is displayed and needs another explicit confirmation", async () => {
+  await withPopup("changed", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    pty.write("\t\t\r");
+    await pty.waitForText("Checkout (");
+    pty.write("feature/free\r");
+    await pty.waitForText(/CHECKOUT\s+feature\/free/);
+    pty.write("\x13");
+    await pty.waitForText("Review this action");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    await pty.waitForText("Destination or Rex target changed");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain("LAUNCH_CALLED");
+    expect(pty.output()).toContain("/projects/alpha.changed");
+  });
+}, 8000);
+
+it("clone path editor cannot launch; optional checkout name remains independent", async () => {
+  await withPopup("collision", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    pty.write("\t\r");
+    await pty.waitForText("Execution machine");
+    pty.write("\x1b[B\r");
+    await pty.waitForText(/CLONE TO\s+\/clones\/alpha/);
+    pty.write("\t\r");
+    await pty.waitForText("Clone to (absolute destination");
+    pty.write("/safe/alpha\r");
+    await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
+    expect(pty.output()).not.toContain("REVIEW_CLONE");
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\t\t\r");
+    await pty.waitForText("DIRECTORY NAME");
+    pty.write("\t\r");
+    await pty.waitForText("Optional custom checkout directory name");
+    pty.write("separate-checkout\r");
+    await pty.waitForText(/DIRECTORY NAME\s+separate-checkout/);
+    pty.write("\r");
+    await pty.waitForText("Optional custom checkout directory name");
+    const beforeClear = pty.output().length;
+    pty.write("Use default\x1b[B\r");
+    await pty.waitForText(/DIRECTORY NAME\s+Default/, beforeClear);
+    pty.write("\r");
+    await pty.waitForText("Optional custom checkout directory name");
+    pty.write("separate-checkout\r");
+    await pty.waitForText(/DIRECTORY NAME\s+separate-checkout/);
+    expect(pty.output()).toContain("/safe/alpha");
+    pty.write("\x13");
+    await pty.waitForText("CLONE_INPUT");
+    expect(pty.output()).toContain('"repo":"/safe/alpha"');
+    expect(pty.output()).toContain('"worktreeName":"separate-checkout"');
+    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain("CLONE_LAUNCHED");
+  });
+}, 8000);
+
 for (const [kind, diagnostic] of [
   ["collision", "Clone destination already exists and is not a repository"],
   ["permission", "Cannot write clone destination parent"]
 ] as const) {
-  it(`automatic clone path stays editable after ${kind} review failure`, async () => {
+  it(`clone destination remains a literal editable path after ${kind} review failure`, async () => {
     await withPopup(kind, async (pty) => {
-      await pty.waitForText("Existing checkout");
-      pty.write("\t\r"); // Machine field, then remote Rex host.
+      await pty.waitForText(/CHECKOUT\s+alpha/);
+      pty.write("\t\r");
       await pty.waitForText("Execution machine");
       pty.write("\x1b[B\r");
-      await pty.waitForText("Review clone");
-      expect(pty.output()).toContain("Destination: /clones/alpha");
+      await pty.waitForText(/CLONE TO\s+\/clones\/alpha/);
+      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
       pty.write("\x13");
       await pty.waitForText(diagnostic);
       expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-      pty.write("\t\t\t\t\r"); // Review leaves Submit focused; wrap through Cancel, Project, Machine to Destination.
-      await pty.waitForText("Clone destination: type absolute path");
+      pty.write("\x1b[Z\x1b[Z\x1b[Z\r");
+      await pty.waitForText("Clone to (absolute destination");
       pty.write("/safe/alpha\r");
-      await pty.waitForText("Destination: /safe/alpha");
+      await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
+      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
       pty.write("\x13");
-      await pty.waitForText("Review this action");
-      expect(pty.output()).toContain("REVIEW_CLONE /safe/alpha");
+      await pty.waitForText("REVIEW_CLONE /safe/alpha");
       expect(pty.output()).not.toContain("CLONE_LAUNCHED");
       pty.write("\x1b");
       expect(await pty.exited).toBe(0);
@@ -272,14 +383,14 @@ for (const [kind, diagnostic] of [
 
 it("existing checkout with backslash basename can open clone chooser and accept an absolute override", async () => {
   await withPopup("unsafe", async (pty) => {
-    await pty.waitForText("Existing checkout");
-    pty.write("\t\t\r"); // Destination chooser.
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    pty.write("\t\t\r");
     await pty.waitForText("Clone this project");
     expect(pty.output()).not.toContain("Could not open worktrees");
-    pty.write("\x1b[B\x1b[B\r"); // Choose Clone this project rather than the existing checkout.
+    pty.write("Clone this project\x1b[B\r");
     await pty.waitForText("Project name is not a safe clone directory");
     pty.write("/safe/alpha\r");
-    await pty.waitForText("Destination: /safe/alpha");
+    await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
     expect(pty.output()).not.toContain("CLONE_LAUNCHED");
     pty.write("\x1b");
     expect(await pty.exited).toBe(0);
@@ -288,7 +399,7 @@ it("existing checkout with backslash basename can open clone chooser and accept 
 
 it("machine field acceptance preserves the new connection error", async () => {
   await withPopup("connect", async (pty) => {
-    await pty.waitForText("Existing checkout");
+    await pty.waitForText(/CHECKOUT\s+alpha/);
     pty.write("\t\r");
     await pty.waitForText("Execution machine");
     pty.write("\x1b[B\r");
