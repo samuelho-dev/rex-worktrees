@@ -1,6 +1,6 @@
 import { Cause, Effect, Option, Queue, Result, Scope, Terminal } from "effect"
 import { Prompt } from "effect/cli"
-import { connectMachine, discover, inspectBranch, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
+import { connectMachine, discover, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
 import { AppError, type ClientTarget, type CloneInput, type ClonePlan, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type LaunchPlan, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type PromptAction, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
 import { makePopupSizer } from "./rex.ts"
 import { sameClonePlan, sameLaunchPlan } from "./worktrees.ts"
@@ -126,7 +126,7 @@ export const renderInputChoice = <A>(
   const selected = matches.indexOf(state.selected ?? -1)
   const start = selected < 0 ? 0 : Math.max(0, Math.min(selected, matches.length - count))
   const lines = [`  ${fit(safeDisplayText(message), width - 2)}`,
-    `  ${color("›", "cyan", colors)} ${fit(safeDisplayText(state.text, true) || (selectionOnly ? "Filter exact choices…" : "Type new value…"), width - 4)}`]
+  `  ${color("›", "cyan", colors)} ${fit(safeDisplayText(state.text, true) || (selectionOnly ? "Filter exact choices…" : "Type new value…"), width - 4)}`]
   for (const index of matches.slice(start, start + count)) {
     const choice = choices[index]
     if (!choice) continue
@@ -140,7 +140,7 @@ export const renderInputChoice = <A>(
 
 const acknowledge = (title: string, lines: readonly string[], tone: NoticeTone): Effect.Effect<void, Terminal.QuitError, Prompt.Environment> =>
   Prompt.run(Prompt.Custom<boolean, void>(false, {
-    render: (_, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function* () {
+    render: (_, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
       const terminal = yield* Terminal.Terminal
       const width = Math.max(20, yield* terminal.columns)
       const height = yield* terminal.rows
@@ -168,9 +168,11 @@ export const generatedName = (draft: Draft) => draft.worktreeName ??
   draft.projectChoice?.name ?? "Worktree"
 export const inputFor = (draft: Draft): LaunchInput | undefined => {
   if (!draft.host || !draft.project || !draft.projectChoice || !draft.destination || !draft.sessionId) return undefined
-  const common = { repo: draft.project.vcs === "jj" ? draft.sourcePath ?? draft.project.path : draft.project.path,
+  const common = {
+    repo: draft.project.vcs === "jj" ? draft.sourcePath ?? draft.project.path : draft.project.path,
     sessionId: draft.sessionId, name: generatedName(draft),
-    clientId: draft.clientId, additional: draft.mode === "new-tab", split: draft.mode === "split" }
+    clientId: draft.clientId, additional: draft.mode === "new-tab", split: draft.mode === "split"
+  }
   if (draft.project.vcs === "jj") return draft.destination.path
     ? { ...common, vcs: "jj", path: draft.destination.path }
     : draft.worktreeName && draft.destination.revision
@@ -203,12 +205,16 @@ export const selectWorktree = (draft: Draft, tree: Worktree): Draft => {
   if (!tree.path || tree.vcs === "jj" && !tree.present)
     throw new AppError({ message: `Workspace ${tree.vcs === "jj" ? tree.name : tree.path} is unavailable; inspect its registered location before opening` })
   return {
-    ...changeDestination(draft, { path: tree.path, label: tree.vcs === "jj" ? tree.name
-      : tree.path.split("/").filter(Boolean).at(-1) ?? tree.path }),
-    ...(tree.vcs === "jj" ? { sourcePath: tree.path,
+    ...changeDestination(draft, {
+      path: tree.path, label: tree.vcs === "jj" ? tree.name
+        : tree.path.split("/").filter(Boolean).at(-1) ?? tree.path
+    }),
+    ...(tree.vcs === "jj" ? {
+      sourcePath: tree.path,
       projectChoice: draft.projectChoice?.source && draft.projectChoice.source.hostId === draft.host?.hostId
         ? { ...draft.projectChoice, source: { ...draft.projectChoice.source, checkoutPath: tree.path } }
-        : draft.projectChoice } : {})
+        : draft.projectChoice
+    } : {})
   }
 }
 export const typeWorktreeName = (draft: Draft, name: string, mainline?: JjRevisionChoice): Draft => ({
@@ -226,103 +232,109 @@ export const selectRevision = (draft: Draft, choice: JjRevisionChoice): Draft =>
 export const cloneInputFor = (draft: Draft): CloneInput | undefined => {
   if (!draft.host || !draft.clone || !draft.sessionId || !draft.clone.repo.startsWith("/")) return undefined
   if (draft.clone.vcs === "jj") return {
-    vcs: "jj", source: { vcs: "jj", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
-      revisions: draft.clone.revisions, ...(draft.clone.revision ? { revision: draft.clone.revision } : {}) },
+    vcs: "jj", source: {
+      vcs: "jj", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
+      revisions: draft.clone.revisions, ...(draft.clone.revision ? { revision: draft.clone.revision } : {})
+    },
     repo: draft.clone.repo, sessionId: draft.sessionId, clientId: draft.clientId,
     name: generatedName(draft), ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {}),
     ...(draft.destination?.revision ? { revision: draft.destination.revision } : {})
   }
   if (!draft.destination?.branch) return undefined
-  return { vcs: "git", source: { vcs: "git", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
-      branches: draft.clone.branches, branch: draft.clone.branch },
+  return {
+    vcs: "git", source: {
+      vcs: "git", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
+      branches: draft.clone.branches, branch: draft.clone.branch
+    },
     repo: draft.clone.repo, sessionId: draft.sessionId, clientId: draft.clientId,
     name: generatedName(draft), branch: draft.destination.branch,
     branchMode: draft.clone.branches.includes(draft.destination.branch) ? "existing" : "create",
-    ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {}) }
+    ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {})
+  }
 }
 
 export const popup = <E, R>(command: readonly string[], context: Effect.Effect<string | undefined, E, R>, origin: PopupOrigin = {}, preferredMachine?: string) =>
   Effect.scoped(Effect.suspend(() => {
     let launchAcknowledged = false
     return Effect.gen(function*() {
-    const terminal = yield* Terminal.Terminal
-    yield* Effect.acquireRelease(
-      terminal.display("\x1b[?1049h"),
-      () => terminal.display("\x1b[?25h\x1b[?1049l").pipe(Effect.orDie)
-    )
-    let machines: Machine[] = []
-    let draft: Draft = { mode: "auto" }
-    let sessions: readonly SessionTarget[] = []
-    let focused: FormField = "project"
-    let error: string | undefined
-    let plan: LaunchPlan | undefined
-    let clonePlan: ClonePlan | undefined
-    let cloneRoots: readonly string[] = []
-    let submitAfterEdit = false
-    let contextPath: string | undefined
-    const resizePopup = yield* makePopupSizer
-    let activeView: FormView | undefined
-    let repaint: Queue.Queue<Terminal.Size> | undefined
-    const fitRequests = yield* Queue.sliding<{ view: FormView; columns: number; rows: number; editing: boolean }>(1)
-    yield* Effect.forever(Effect.gen(function*() {
-      const { view, columns, rows, editing } = yield* Queue.take(fitRequests)
-      const warning = yield* resizePopup(
-        { columns: 96, rows: popupTargetRows(view, columns, editing) },
-        { columns, rows }
+      const terminal = yield* Terminal.Terminal
+      yield* Effect.acquireRelease(
+        terminal.display("\x1b[?1049h"),
+        () => terminal.display("\x1b[?25h\x1b[?1049l").pipe(Effect.orDie)
       )
-      if (activeView !== view) return
-      const changed = view.fitWarning !== warning
-      view.fitWarning = warning
-      if (changed && repaint) yield* Queue.offer(repaint, { columns, rows })
-    })).pipe(Effect.forkScoped)
-    const chooseField: (view: FormView, initialFocus: FormField) => Effect.Effect<FormField, Terminal.QuitError, Prompt.Environment> =
-      Effect.fnUntraced(function* (view: FormView, initialFocus: FormField) {
-        const terminal = yield* Terminal.Terminal
-        const size = yield* terminal.size
-        const resized = yield* Queue.sliding<Terminal.Size>(1)
-        yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
-        yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
-        const fields: FormField[] = [...view.rows.map(row => row.id), "submit", "cancel"]
-        const initial = Math.max(0, fields.indexOf(initialFocus))
-        const prompt = Prompt.Custom<number, FormField, Terminal.Size>(initial, resized, {
-          render: (index, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function* () {
-            const columns = yield* terminal.columns
-            const rows = yield* terminal.rows
-            yield* Queue.offer(fitRequests, { view, columns, rows, editing: false })
-            return `\x1b[H\x1b[2J${renderFormFrame(view, fields[index], false, columns, rows)}`
-          }),
-          clear: () => Effect.succeed(""),
-          process: (event, index) => {
-            if (event._tag === "Event") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "NextFrame", state: index })
-            const { key } = event.input
-            if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "Submit", value: "cancel" })
-            if (key.ctrl && key.name === "s") return Effect.succeed<PromptAction<number, FormField>>(view.submitDisabled
-              ? { _tag: "Beep" } : { _tag: "Submit", value: "submit" })
-            if (key.name === "enter" || key.name === "return") {
-              const selected = fields[index]
-              return Effect.succeed<PromptAction<number, FormField>>(selected === "submit" && view.submitDisabled || view.rows.some(row => row.id === selected && row.disabled)
-                ? { _tag: "Beep" }
-                : { _tag: "Submit", value: selected })
+      let machines: Machine[] = []
+      let draft: Draft = { mode: "auto" }
+      let sessions: readonly SessionTarget[] = []
+      let focused: FormField = "project"
+      let error: string | undefined
+      let plan: LaunchPlan | undefined
+      let clonePlan: ClonePlan | undefined
+      let cloneRoot = ""
+      let cloneRoots: readonly string[] = []
+      let contextPath: string | undefined
+      const resizePopup = yield* makePopupSizer
+      let activeView: FormView | undefined
+      let repaint: Queue.Queue<Terminal.Size> | undefined
+      const fitRequests = yield* Queue.sliding<{ view: FormView; columns: number; rows: number; editing: boolean }>(1)
+      yield* Effect.forever(Effect.gen(function*() {
+        const { view, columns, rows, editing } = yield* Queue.take(fitRequests)
+        const warning = yield* resizePopup(
+          { columns: 96, rows: popupTargetRows(view, columns, editing) },
+          { columns, rows }
+        )
+        if (activeView !== view) return
+        const changed = view.fitWarning !== warning
+        view.fitWarning = warning
+        if (changed && repaint) yield* Queue.offer(repaint, { columns, rows })
+      })).pipe(Effect.forkScoped)
+      const chooseField: (view: FormView, initialFocus: FormField) => Effect.Effect<FormField, Terminal.QuitError, Prompt.Environment> =
+        Effect.fnUntraced(function*(view: FormView, initialFocus: FormField) {
+          const terminal = yield* Terminal.Terminal
+          const size = yield* terminal.size
+          const resized = yield* Queue.sliding<Terminal.Size>(1)
+          yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
+          yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
+          const fields: FormField[] = [...view.rows.map(row => row.id), "submit", "cancel"]
+          const initial = Math.max(0, fields.indexOf(initialFocus))
+          const prompt = Prompt.Custom<number, FormField, Terminal.Size>(initial, resized, {
+            render: (index, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
+              const columns = yield* terminal.columns
+              const rows = yield* terminal.rows
+              yield* Queue.offer(fitRequests, { view, columns, rows, editing: false })
+              return `\x1b[H\x1b[2J${renderFormFrame(view, fields[index], false, columns, rows)}`
+            }),
+            clear: () => Effect.succeed(""),
+            process: (event, index) => {
+              if (event._tag === "Event") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "NextFrame", state: index })
+              const { key } = event.input
+              if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "Submit", value: "cancel" })
+              if (key.ctrl && key.name === "s") return Effect.succeed<PromptAction<number, FormField>>(view.submitDisabled
+                ? { _tag: "Beep" } : { _tag: "Submit", value: "submit" })
+              if (key.name === "enter" || key.name === "return") {
+                const selected = fields[index]
+                return Effect.succeed<PromptAction<number, FormField>>(selected === "submit" && view.submitDisabled || view.rows.some(row => row.id === selected && row.disabled)
+                  ? { _tag: "Beep" }
+                  : { _tag: "Submit", value: selected })
+              }
+              const backward = key.name === "up" || key.name === "k" && !key.ctrl || key.name === "backtab" || key.name === "tab" && key.shift
+              const forward = key.name === "down" || key.name === "j" && !key.ctrl || key.name === "tab"
+              return Effect.succeed<PromptAction<number, FormField>>(backward || forward
+                ? { _tag: "NextFrame", state: (index + (backward ? -1 : 1) + fields.length) % fields.length }
+                : { _tag: "Beep" })
             }
-            const backward = key.name === "up" || key.name === "k" && !key.ctrl || key.name === "backtab" || key.name === "tab" && key.shift
-            const forward = key.name === "down" || key.name === "j" && !key.ctrl || key.name === "tab"
-            return Effect.succeed<PromptAction<number, FormField>>(backward || forward
-              ? { _tag: "NextFrame", state: (index + (backward ? -1 : 1) + fields.length) % fields.length }
-              : { _tag: "Beep" })
-          }
-        })
-        return yield* Prompt.run(prompt)
-      }, Effect.scoped)
-    const inputChoice: <A>(options: InputChoiceOptions<A>) => Effect.Effect<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment> =
-      Effect.fnUntraced(function*<A>(options: InputChoiceOptions<A>): Effect.fn.Return<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment | Scope.Scope> {
-        const terminal = yield* Terminal.Terminal
-        const size = yield* terminal.size
-        const resized = yield* Queue.sliding<Terminal.Size>(1)
-        yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
-        yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
-        const result = yield* Prompt.run(Prompt.Custom<InputChoiceState, InputChoiceResult<A> | null, Terminal.Size>(
-          { text: "", selected: options.selected === undefined || options.selected < 0 ? null : options.selected }, resized, {
-            render: (state, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function* () {
+          })
+          return yield* Prompt.run(prompt)
+        }, Effect.scoped)
+      const inputChoice: <A>(options: InputChoiceOptions<A>) => Effect.Effect<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment> =
+        Effect.fnUntraced(function*<A>(options: InputChoiceOptions<A>): Effect.fn.Return<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment | Scope.Scope> {
+          const terminal = yield* Terminal.Terminal
+          const size = yield* terminal.size
+          const resized = yield* Queue.sliding<Terminal.Size>(1)
+          yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
+          yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
+          const result = yield* Prompt.run(Prompt.Custom<InputChoiceState, InputChoiceResult<A> | null, Terminal.Size>(
+            { text: "", selected: options.selected === undefined || options.selected < 0 ? null : options.selected }, resized, {
+            render: (state, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
               const columns = yield* terminal.columns
               const rows = yield* terminal.rows
               const view = activeView
@@ -332,471 +344,491 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
               return `\x1b[H\x1b[2J${renderFormFrame(view, focused, true, columns, rows)}${editor}`
             }),
             clear: () => Effect.succeed(""),
-            process: (event, state) => {
-              if (event._tag === "Event") return Effect.succeed<PromptAction<InputChoiceState, InputChoiceResult<A> | null>>({ _tag: "NextFrame", state })
-              const action = advanceInputChoice(state, event.input, options.choices, options.selectionOnly)
-              if (event.input.key.ctrl && event.input.key.name === "s" && action._tag === "Submit" && action.value)
-                submitAfterEdit = true
-              return Effect.succeed<PromptAction<InputChoiceState, InputChoiceResult<A> | null>>(action)
-            }
+            process: (event, state) => Effect.succeed<PromptAction<InputChoiceState, InputChoiceResult<A> | null>>(
+              event._tag === "Event" ? { _tag: "NextFrame", state }
+                : advanceInputChoice(state, event.input, options.choices, options.selectionOnly))
           }
-        ))
-        return result === null ? yield* Effect.fail(new Terminal.QuitError({})) : result
-      }, Effect.scoped)
-    const choose = Effect.fnUntraced(function*<T>(message: string, choices: readonly InputChoice<T>[]): Effect.fn.Return<T, AppError | Terminal.QuitError, Prompt.Environment> {
+          ))
+          return result === null ? yield* Effect.fail(new Terminal.QuitError({})) : result
+        }, Effect.scoped)
+      const choose = Effect.fnUntraced(function*<T>(message: string, choices: readonly InputChoice<T>[]): Effect.fn.Return<T, AppError | Terminal.QuitError, Prompt.Environment> {
         const picked = yield* inputChoice({
           message, choices, selectionOnly: true, selected: choices.findIndex(choice => choice.selected)
         })
         if (picked.kind !== "selected") return yield* Effect.fail(new AppError({ message: "Select an exact value" }))
         return picked.value
       })
-    let projects: ProjectChoice[] = []
-    const focusClient = (clients: readonly ClientTarget[]) =>
-      clients.some(item => item.id === draft.clientId) ? draft.clientId
-      : draft.host?.local && clients.some(item => item.id === origin.clientId) ? origin.clientId
-      : clients.length === 1 ? clients[0]?.id : undefined
-    const loadMachines = Effect.gen(function*() {
-      const found = yield* Effect.result(listMachines)
-      if (Result.isFailure(found)) error = problem(found.failure)
-      else { machines = found.success; error = undefined }
-    })
-    const refresh = Effect.gen(function*() {
-      plan = undefined
-      clonePlan = undefined
-      if (!draft.host) return
-      const cloneInput = cloneInputFor(draft)
-      if (cloneInput) {
-        const result = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
-        if (Result.isSuccess(result)) { clonePlan = result.success; error = undefined }
-        else error = problem(result.failure)
-        return
-      }
-      const input = inputFor(draft)
-      if (!input) return
-      const result = yield* Effect.result(review(draft.host, command, input))
-      if (Result.isSuccess(result)) { plan = result.success; error = undefined }
-      else error = problem(result.failure)
-    })
-    const known = (host: DestinationHost, repository: Repository, checkout?: Repository): ProjectChoice => ({
-      name: repository.name, source: { machineKey: host.key, hostId: host.hostId, repository,
-        ...(repository.vcs === "jj" && checkout?.vcs === "jj" && checkout.commonDir === repository.commonDir
-          ? { checkoutPath: checkout.path } : {}) }
-    })
-    const proposeClone = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost, repo: string) {
-      const reference = choice.source
-      if (!reference) return yield* Effect.fail(new AppError({ message: "Choose a known source project before cloning" }))
-      const sourceMachine = machines.find(item => item.key === reference.machineKey)
-      if (!sourceMachine) return yield* Effect.fail(new AppError({ message: "Source Rex machine is no longer registered" }))
-      const sourceHost = yield* connectMachine(sourceMachine)
-      if (sourceHost.hostId !== reference.hostId)
-        return yield* Effect.fail(new AppError({ message: "Source Rex host identity changed; select the project again" }))
-      const source = yield* sourceForClone(sourceHost, command, reference.checkoutPath ?? reference.repository.path)
-      draft = { ...draft, projectChoice: choice, host, project: undefined,
-        clone: { ...source, repo }, destination: source.vcs === "git" && source.branch
-          ? { branch: source.branch, label: source.branch } : undefined,
-        worktreeName: undefined }
-    })
-    const cloneDestination = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost) {
-      const picked = yield* inputChoice({
-        message: `Clone destination on ${host.label} (absolute path; only pushed history transfers)`,
-        choices: cloneRoots.map(root => ({ value: `${root.replace(/\/$/, "")}/${choice.name}`, title: choice.name,
-          description: `${root.replace(/\/$/, "")}/${choice.name} · configured root suggestion` }))
+      let projects: ProjectChoice[] = []
+      const focusClient = (clients: readonly ClientTarget[]) =>
+        clients.some(item => item.id === draft.clientId) ? draft.clientId
+          : draft.host?.local && clients.some(item => item.id === origin.clientId) ? origin.clientId
+            : clients.length === 1 ? clients[0]?.id : undefined
+      const loadMachines = Effect.gen(function*() {
+        const found = yield* Effect.result(listMachines)
+        if (Result.isFailure(found)) error = problem(found.failure)
+        else { machines = found.success; error = undefined }
       })
-      const repo = picked.kind === "selected" ? picked.value : picked.text.trim()
-      if (!repo.startsWith("/")) return yield* Effect.fail(new AppError({ message: "Clone destination must be an absolute path on the selected machine" }))
-      yield* proposeClone(choice, host, repo)
-    })
-    const bindProject = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost, available: readonly Repository[]) {
-      const source = choice.source
-      let path = source?.machineKey === host.key && source.hostId === host.hostId
-        ? source.checkoutPath ?? source.repository.path : undefined
-      if (!path && choice.path?.startsWith("/")) path = choice.path
-      if (!path) {
-        const directory = yield* inputChoice({
-          message: `Project directory on ${host.label} (existing checkout or missing clone destination; absolute path)`,
-          choices: [
-            ...available.map(repo => ({ value: repo.path, title: repo.name, description: repo.path })),
-            ...cloneRoots.map(root => ({ value: `${root.replace(/\/$/, "")}/${choice.name}`, title: choice.name,
-              description: `${root.replace(/\/$/, "")}/${choice.name} · configured root suggestion` }))
-          ]
-        })
-        path = directory.kind === "selected" ? directory.value : directory.text.trim()
+      const clonePath = (choice: ProjectChoice) => {
+        if (!choice.name || choice.name === "." || choice.name === ".." || /[/\\\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(choice.name))
+          throw new AppError({ message: "Project name must be one safe directory name; enter an absolute project path instead" })
+        return `${cloneRoot.replace(/\/$/, "")}/${choice.name}`
       }
-      if (!path.startsWith("/")) return yield* Effect.fail(new AppError({ message: "Project directory must be an absolute path on this machine" }))
-      const inspected = yield* Effect.result(inspectProject(host, command, path))
-      if (Result.isFailure(inspected)) {
-        if (choice.source && inspected.failure instanceof AppError &&
-            inspected.failure.message.startsWith("Project directory does not exist:")) {
-          yield* proposeClone(choice, host, path)
-          return undefined
+      const known = (host: DestinationHost, repository: Repository, checkout?: Repository): ProjectChoice => ({
+        name: repository.name, source: {
+          machineKey: host.key, hostId: host.hostId, repository,
+          ...(repository.vcs === "jj" && checkout?.vcs === "jj" && checkout.commonDir === repository.commonDir
+            ? { checkoutPath: checkout.path } : {})
         }
-        return yield* Effect.fail(inspected.failure)
-      }
-      if (source?.machineKey === host.key && source.hostId === host.hostId &&
+      })
+      const proposeClone = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost, repo: string) {
+        const reference = choice.source
+        if (!reference) return yield* Effect.fail(new AppError({ message: "Choose a known source project before cloning" }))
+        const sourceMachine = machines.find(item => item.key === reference.machineKey)
+        if (!sourceMachine) return yield* Effect.fail(new AppError({ message: "Source Rex machine is no longer registered" }))
+        const sourceHost = yield* connectMachine(sourceMachine)
+        if (sourceHost.hostId !== reference.hostId)
+          return yield* Effect.fail(new AppError({ message: "Source Rex host identity changed; select the project again" }))
+        const source = yield* sourceForClone(sourceHost, command, reference.checkoutPath ?? reference.repository.path)
+        draft = {
+          ...draft, projectChoice: choice, host, project: undefined,
+          clone: { ...source, repo }, destination: source.vcs === "git" && source.branch
+            ? { branch: source.branch, label: source.branch } : undefined,
+          worktreeName: undefined
+        }
+      })
+      const cloneDestination = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost) {
+        yield* proposeClone(choice, host, clonePath(choice))
+      })
+      const bindProject = Effect.fnUntraced(function*(choice: ProjectChoice, host: DestinationHost, available: readonly Repository[]) {
+        const source = choice.source
+        let path = source?.machineKey === host.key && source.hostId === host.hostId
+          ? source.checkoutPath ?? source.repository.path : undefined
+        if (!path && choice.path?.startsWith("/")) path = choice.path
+        if (!path) {
+          if (source) path = clonePath(choice)
+          else {
+            const directory = yield* inputChoice({
+              message: `Project directory on ${host.label} (existing checkout; absolute path)`,
+              choices: available.map(repo => ({ value: repo.path, title: repo.name, description: repo.path }))
+            })
+            path = directory.kind === "selected" ? directory.value : directory.text.trim()
+          }
+        }
+        if (!path.startsWith("/")) return yield* Effect.fail(new AppError({ message: "Project directory must be an absolute path on this machine" }))
+        const inspected = yield* Effect.result(inspectProject(host, command, path))
+        if (Result.isFailure(inspected)) {
+          if (choice.source && inspected.failure instanceof AppError &&
+            inspected.failure.message.startsWith("Project directory does not exist:")) {
+            yield* proposeClone(choice, host, path)
+            return undefined
+          }
+          return yield* Effect.fail(inspected.failure)
+        }
+        if (source?.machineKey === host.key && source.hostId === host.hostId &&
           (inspected.success.project.vcs !== source.repository.vcs ||
             inspected.success.project.commonDir !== source.repository.commonDir))
-        return yield* Effect.fail(new AppError({ message: "Project directory changed; select the exact project directory again" }))
-      return inspected.success
-    })
-    const activate = Effect.fnUntraced(function*(machine: Machine) {
-      const previousHostId = draft.host?.hostId
-      draft = changeMachine(draft, machine)
-      const discoveredContext = machine.local ? contextPath : undefined
-      contextPath = undefined
-      const connected = yield* Effect.result(connectMachine(machine))
-      if (Result.isFailure(connected)) {
-        draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoots = []
-        error = problem(connected.failure)
-        return
-      }
-      if (previousHostId && previousHostId !== connected.success.hostId) {
-        draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }
-        sessions = []; plan = undefined; clonePlan = undefined
-      }
-      draft = { ...draft, host: connected.success }
-      const discovered = yield* Effect.result(discover(connected.success, command, discoveredContext))
-      if (Result.isFailure(discovered)) {
-        draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoots = []
-        error = problem(discovered.failure)
-        return
-      }
-      const found = discovered.success
-      cloneRoots = found.roots
-      projects = [...projects.filter(item => item.source?.machineKey !== machine.key || item.source.hostId !== connected.success.hostId),
-        ...found.projects.map(repo => known(connected.success, repo, found.checkout))]
-      sessions = found.sessions
-      draft = { ...draft, sessionId: sessions.some(item => item.id === draft.sessionId) ? draft.sessionId
-        : connected.success.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? origin.sessionId
-        : sessions.length === 1 ? sessions[0]?.id : undefined,
-        clientId: focusClient(found.clients) }
-      if (!draft.projectChoice && found.checkout && discoveredContext) {
-        const inspected = yield* Effect.result(inspectProject(connected.success, command, found.checkout.path))
-        if (Result.isFailure(inspected)) { error = problem(inspected.failure); return }
-        if (Result.isSuccess(inspected)) {
-          draft = changeProjectChoice(draft,
-            known(connected.success, inspected.success.project, inspected.success.checkout))
-          draft = changeProject(draft, inspected.success.project)
-          if (inspected.success.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.success.checkout.path }
-          const tree = inspected.success.worktrees.find(item => item.path === found.checkout?.path &&
-            (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
-          if (tree) draft = selectWorktree(draft, tree)
-        }
-      } else if (draft.projectChoice) {
-        const inspected = yield* Effect.result(bindProject(draft.projectChoice, connected.success, found.projects))
-        if (Result.isFailure(inspected)) {
-          if (!Terminal.isQuitError(inspected.failure)) error = problem(inspected.failure)
+          return yield* Effect.fail(new AppError({ message: "Project directory changed; select the exact project directory again" }))
+        return inspected.success
+      })
+      const activate = Effect.fnUntraced(function*(machine: Machine) {
+        const previousHostId = draft.host?.hostId
+        draft = changeMachine(draft, machine)
+        const discoveredContext = machine.local ? contextPath : undefined
+        contextPath = undefined
+        const connected = yield* Effect.result(connectMachine(machine))
+        if (Result.isFailure(connected)) {
+          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
+          error = problem(connected.failure)
           return
         }
-        if (inspected.success) {
-          draft = changeProject(draft, inspected.success.project)
-          if (inspected.success.checkout.vcs === "jj" && !draft.sourcePath)
-            draft = { ...draft, sourcePath: inspected.success.checkout.path }
+        if (previousHostId && previousHostId !== connected.success.hostId) {
+          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }
+          sessions = []; plan = undefined; clonePlan = undefined
         }
-      }
-      error = undefined
-      yield* refresh
-    })
-    const formView = (initializing = false): FormView => {
-      const rows: FormRow[] = [
+        draft = { ...draft, host: connected.success }
+        const discovered = yield* Effect.result(discover(connected.success, command, discoveredContext))
+        if (Result.isFailure(discovered)) {
+          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
+          error = problem(discovered.failure)
+          return
+        }
+        const found = discovered.success
+        cloneRoot = found.cloneRoot
+        cloneRoots = found.roots
+        projects = [...projects.filter(item => item.source?.machineKey !== machine.key || item.source.hostId !== connected.success.hostId),
+        ...found.projects.map(repo => known(connected.success, repo, found.checkout))]
+        sessions = found.sessions
+        draft = {
+          ...draft, sessionId: sessions.some(item => item.id === draft.sessionId) ? draft.sessionId
+            : connected.success.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? origin.sessionId
+              : sessions.length === 1 ? sessions[0]?.id : undefined,
+          clientId: focusClient(found.clients)
+        }
+        if (!draft.projectChoice && found.checkout && discoveredContext) {
+          const inspected = yield* Effect.result(inspectProject(connected.success, command, found.checkout.path))
+          if (Result.isFailure(inspected)) { error = problem(inspected.failure); return }
+          if (Result.isSuccess(inspected)) {
+            draft = changeProjectChoice(draft,
+              known(connected.success, inspected.success.project, inspected.success.checkout))
+            draft = changeProject(draft, inspected.success.project)
+            if (inspected.success.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.success.checkout.path }
+            const tree = inspected.success.worktrees.find(item => item.path === found.checkout?.path &&
+              (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
+            if (tree) draft = selectWorktree(draft, tree)
+          }
+        } else if (draft.projectChoice) {
+          const inspected = yield* Effect.result(bindProject(draft.projectChoice, connected.success, found.projects))
+          if (Result.isFailure(inspected)) {
+            if (!Terminal.isQuitError(inspected.failure)) error = problem(inspected.failure)
+            return
+          }
+          if (inspected.success) {
+            draft = changeProject(draft, inspected.success.project)
+            if (inspected.success.checkout.vcs === "jj" && !draft.sourcePath)
+              draft = { ...draft, sourcePath: inspected.success.checkout.path }
+          }
+        }
+        error = undefined
+      })
+      const formView = (initializing = false): FormView => {
+        const rows: FormRow[] = [
           { id: "project", label: "Project", value: draft.projectChoice?.name ?? "Choose a project" },
-          { id: "machine", label: "Machine", value: draft.machine?.label ?? "Choose Rex host",
-            detail: draft.host ? `Host ID: ${draft.host.hostId}` : draft.machine?.selector },
-          { id: "destination", label: draft.project?.vcs === "jj" || draft.clone?.vcs === "jj" ? "Workspace" : "Worktree",
+          {
+            id: "machine", label: "Machine", value: draft.machine?.label ?? "Choose Rex host",
+            detail: draft.host ? `Host ID: ${draft.host.hostId}` : draft.machine?.selector
+          },
+          {
+            id: "destination", label: draft.project?.vcs === "jj" || draft.clone?.vcs === "jj" ? "Workspace" : "Worktree",
             value: draft.clone
               ? draft.worktreeName ?? (draft.clone.vcs === "jj" ? "Use cloned default workspace" : "Use branch checkout after clone")
               : draft.worktreeName ?? draft.destination?.label ?? "Choose checkout or type new directory name",
-            disabled: !draft.host || !(draft.project || draft.clone) },
-          { id: "branch", label: draft.project?.vcs === "jj" || draft.clone?.vcs === "jj" ? "Start from" : "Branch",
+            detail: draft.clone ? `Clone destination on ${draft.host?.label}: ${draft.clone.repo} · Enter to change` : undefined,
+            disabled: !draft.host || !(draft.project || draft.clone)
+          },
+          {
+            id: "branch", label: draft.project?.vcs === "jj" || draft.clone?.vcs === "jj" ? "Start from" : "Branch",
             value: draft.project?.vcs === "jj" || draft.clone?.vcs === "jj"
               ? draft.destination?.revision ? draft.destination.label : draft.clone ? "Cloned default" : "Select or type a revision"
-              : draft.destination?.branch ?? (draft.destination?.path && plan?.vcs === "git" ? plan.branch ?? "Existing checkout" : "Select or type branch"),
+              : draft.destination?.branch ?? (draft.destination?.path ? "Existing checkout" : "Select or type branch"),
             disabled: !draft.host || !(draft.project || draft.clone) || (draft.project?.vcs === "jj"
               ? !draft.worktreeName : draft.clone?.vcs === "jj"
-                ? false : !(draft.clone || draft.worktreeName || draft.destination?.path)) },
-          { id: "session", label: "Session", value: sessions.find(s => s.id === draft.sessionId)?.label ?? draft.sessionId ?? "Choose exact session",
-            detail: draft.sessionId, disabled: !draft.host },
-          { id: "mode", label: "Mode", value: draft.clone ? "New tab (clone task)" : draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
-            : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host || !!draft.clone }
+                ? false : !(draft.clone || draft.worktreeName || draft.destination?.path))
+          },
+          {
+            id: "session", label: "Session", value: sessions.find(s => s.id === draft.sessionId)?.label ?? draft.sessionId ?? "Choose exact session",
+            detail: draft.sessionId, disabled: !draft.host
+          },
+          {
+            id: "mode", label: "Mode", value: draft.clone ? "New tab (clone task)" : draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
+              : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host || !!draft.clone
+          }
         ]
-      return {
-        rows: rows.filter(row => !(row.id === "branch" && draft.project?.vcs === "jj" && !draft.clone && !!draft.destination?.path))
-          .map(row => ({ ...row, disabled: initializing || row.disabled })),
-        submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Clone & Open" : "Open worktree"),
-        submitDisabled: initializing || !draft.host || !(clonePlan || plan),
-        notice: [clonePlan?.detail, clonePlan?.warning, plan?.detail, plan?.warning].filter(Boolean).join(" · ") || undefined,
-        error: initializing ? undefined : error ?? (!draft.projectChoice ? "Select a project" : !draft.machine ? "Select a Rex machine"
-          : !draft.host ? "Connect to the selected machine and install its worktrees helper if missing"
-          : !(draft.project || draft.clone) ? "Select the exact project directory on this machine"
-          : !draft.destination && draft.project?.vcs !== "jj" && draft.clone?.vcs !== "jj" ? "Select a branch"
-          : draft.project?.vcs === "jj" && (!draft.worktreeName && !draft.destination?.path || !!draft.worktreeName && !draft.destination?.revision)
-            ? "Choose an existing workspace or a new workspace name and starting revision"
-          : !draft.sessionId ? "Select an exact Rex session" : undefined),
-        fitWarning: activeView?.fitWarning
+        return {
+          rows: rows.filter(row => !(row.id === "branch" && draft.project?.vcs === "jj" && !draft.clone && !!draft.destination?.path))
+            .map(row => ({ ...row, disabled: initializing || row.disabled })),
+          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Clone & Open" : "Open worktree"),
+          submitDisabled: initializing || !draft.host || !(cloneInputFor(draft) || inputFor(draft)),
+          notice: [draft.clone ? `Destination: ${draft.clone.repo} · Only pushed history transfers` : undefined,
+          clonePlan || plan ? "Review this action; submit again to launch" : undefined,
+          clonePlan?.detail, clonePlan?.warning, plan?.detail, plan?.warning].filter(Boolean).join(" · ") || undefined,
+          error: initializing ? undefined : error ?? (!draft.projectChoice ? "Select a project" : !draft.machine ? "Select a Rex machine"
+            : !draft.host ? "Connect to the selected machine and install its worktrees helper if missing"
+              : !(draft.project || draft.clone) ? "Select the exact project directory on this machine"
+                : !draft.destination && draft.project?.vcs !== "jj" && draft.clone?.vcs !== "jj" ? "Select a branch"
+                  : draft.project?.vcs === "jj" && (!draft.worktreeName && !draft.destination?.path || !!draft.worktreeName && !draft.destination?.revision)
+                    ? "Choose an existing workspace or a new workspace name and starting revision"
+                    : !draft.sessionId ? "Select an exact Rex session" : undefined),
+          fitWarning: activeView?.fitWarning
+        }
       }
-    }
-    const initialView = formView(true)
-    activeView = initialView
-    const initialize = Effect.gen(function* () {
-      contextPath = yield* context
-      yield* loadMachines
-      const initial = machines.find(item => preferredMachine && [item.key, item.selector, item.label].includes(preferredMachine))
-        ?? (!preferredMachine ? machines.find(item => item.local) : undefined)
-      if (initial) yield* activate(initial)
-      else if (preferredMachine) error = `Machine ${preferredMachine} is not in Rex hosts. Select a connected machine.`
-      return yield* Effect.succeed<"ready">("ready")
-    })
-    const initialAction = yield* Effect.raceFirst(initialize,
-      chooseField(initialView, "project").pipe(Effect.catchTag("QuitError", () => Effect.succeed<FormField>("cancel"))))
-    if (initialAction === "cancel") return
-    let queuedSubmit = false
-    while (true) {
-      const view = formView()
-      activeView = view
-      const action: FormField = queuedSubmit ? "submit"
-        : yield* chooseField(view, focused).pipe(Effect.catchTag("QuitError", () => Effect.succeed<FormField>("cancel")))
-      queuedSubmit = false
-      focused = action
-      if (action === "cancel") return
-      if (action === "submit") {
-        const cloneInput = cloneInputFor(draft)
-        if (draft.host && cloneInput && clonePlan) {
-          const current = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
-          if (Result.isFailure(current)) { error = problem(current.failure); clonePlan = undefined; continue }
-          if (!sameClonePlan(current.success, clonePlan)) {
-            clonePlan = current.success
-            error = "Clone destination or Rex target changed; review the updated URL and destination before submitting again"
+      const initialView = formView(true)
+      activeView = initialView
+      const initialize = Effect.gen(function*() {
+        contextPath = yield* context
+        yield* loadMachines
+        const initial = machines.find(item => preferredMachine && [item.key, item.selector, item.label].includes(preferredMachine))
+          ?? (!preferredMachine ? machines.find(item => item.local) : undefined)
+        if (initial) yield* activate(initial)
+        else if (preferredMachine) error = `Machine ${preferredMachine} is not in Rex hosts. Select a connected machine.`
+        return yield* Effect.succeed<"ready">("ready")
+      })
+      const initialAction = yield* Effect.raceFirst(initialize,
+        chooseField(initialView, "project").pipe(Effect.catchTag("QuitError", () => Effect.succeed<FormField>("cancel"))))
+      if (initialAction === "cancel") return
+      while (true) {
+        const view = formView()
+        activeView = view
+        const action: FormField = yield* chooseField(view, focused).pipe(Effect.catchTag("QuitError", () => Effect.succeed<FormField>("cancel")))
+        focused = action
+        if (action === "cancel") return
+        if (action === "submit") {
+          const cloneInput = cloneInputFor(draft)
+          if (!draft.host || !(cloneInput || inputFor(draft))) continue
+          if (cloneInput && !clonePlan) {
+            const reviewed = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
+            if (Result.isFailure(reviewed)) { error = problem(reviewed.failure); continue }
+            clonePlan = reviewed.success
+            error = undefined
             continue
           }
-          const launched = yield* Effect.result(submitClone(draft.host, command, cloneInput, clonePlan))
+          if (!cloneInput && !plan) {
+            const reviewed = yield* Effect.result(review(draft.host, command, inputFor(draft)!))
+            if (Result.isFailure(reviewed)) { error = problem(reviewed.failure); continue }
+            plan = reviewed.success
+            error = undefined
+            continue
+          }
+          if (draft.host && cloneInput && clonePlan) {
+            const current = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
+            if (Result.isFailure(current)) { error = problem(current.failure); clonePlan = undefined; continue }
+            if (!sameClonePlan(current.success, clonePlan)) {
+              clonePlan = current.success
+              error = "Clone destination or Rex target changed; review the updated URL and destination before submitting again"
+              continue
+            }
+            const launched = yield* Effect.result(submitClone(draft.host, command, cloneInput, clonePlan))
+            if (Result.isFailure(launched)) {
+              launchAcknowledged = true
+              yield* acknowledge("Clone needs inspection",
+                [problem(launched.failure), `Destination: ${clonePlan.repo}`,
+                  "A clone or Rex tab may already exist. Inspect the destination and session before opening again."], "error")
+              return yield* Effect.fail(launched.failure)
+            }
+            if (launched.success.warning) yield* acknowledge("Clone task submitted with warning",
+              [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.repo}`,
+                "The clone task was created; Rex may not have focused its tab. Inspect the session before opening again.",
+              launched.success.warning], "warning")
+            return
+          }
+          const input = inputFor(draft)
+          if (!draft.host || !input || !plan) continue
+          const current = yield* Effect.result(review(draft.host, command, input))
+          if (Result.isFailure(current)) { error = problem(current.failure); plan = undefined; continue }
+          if (!sameLaunchPlan(current.success, plan)) {
+            plan = current.success
+            error = "Destination or Rex target changed; review the updated action before submitting again"
+            continue
+          }
+          const launched = yield* Effect.result(submit(draft.host, command, input, plan))
           if (Result.isFailure(launched)) {
             launchAcknowledged = true
-            yield* acknowledge("Clone needs inspection",
-              [problem(launched.failure), `Destination: ${clonePlan.repo}`,
-                "A clone or Rex tab may already exist. Inspect the destination and session before opening again."], "error")
+            yield* acknowledge("Launch needs inspection",
+              [problem(launched.failure), `Destination: ${plan.path}`,
+                "The checkout or Rex tab may already have changed. Inspect the session before opening again."], "error")
             return yield* Effect.fail(launched.failure)
           }
-          if (launched.success.warning) yield* acknowledge("Clone task submitted with warning",
-            [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.repo}`,
-              "The clone task was created; Rex may not have focused its tab. Inspect the session before opening again.",
-              launched.success.warning], "warning")
-          return
-        }
-        const input = inputFor(draft)
-        if (!draft.host || !input || !plan) continue
-        const current = yield* Effect.result(review(draft.host, command, input))
-        if (Result.isFailure(current)) { error = problem(current.failure); plan = undefined; continue }
-        if (!sameLaunchPlan(current.success, plan)) {
-          plan = current.success
-          error = "Destination or Rex target changed; review the updated action before submitting again"
-          continue
-        }
-        const launched = yield* Effect.result(submit(draft.host, command, input, plan))
-        if (Result.isFailure(launched)) {
-          launchAcknowledged = true
-          yield* acknowledge("Launch needs inspection",
-            [problem(launched.failure), `Destination: ${plan.path}`,
-              "The checkout or Rex tab may already have changed. Inspect the session before opening again."], "error")
-          return yield* Effect.fail(launched.failure)
-        }
-        if (launched.success.warning || plan.warning) yield* acknowledge("Opened with warning",
-          [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.path}`,
+          if (launched.success.warning || plan.warning) yield* acknowledge("Opened with warning",
+            [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.path}`,
             `Action: ${launched.success.action}`, launched.success.pending
               ? `Task submitted; ${plan.vcs === "jj" ? "JJ" : "Git"} setup may still be running.` : "Existing task focused.",
             ...new Set([plan.warning, launched.success.warning].filter((line): line is string => !!line))], "warning")
-        return
-      }
-      if (view.rows.find(row => row.id === action)?.disabled) continue
-      const hadCloneReview = !!clonePlan
-      const editing = yield* Effect.result(Effect.gen(function*() {
-        if (action === "machine") {
-          yield* loadMachines
-          if (!machines.length) return yield* Effect.fail(new AppError({ message: error ?? "No Rex machines available" }))
-          const machine = yield* choose("Execution machine", machines.map(item =>
-            selected(item, item.key === draft.machine?.key, item.label,
-              item.local ? "This machine" : `Rex host · ${item.selector}`)))
-          yield* activate(machine)
-        } else if (action === "project") {
-          const choices = projects.map(item => ({ value: item, title: item.name,
-            description: `${item.source?.repository.path ?? item.path ?? ""} · ${machines.find(machine => machine.key === item.source?.machineKey)?.label ?? "Source machine"}` }))
-          const picked = yield* inputChoice({ message: "Project (select known or type name / absolute path)",
-            choices })
-          const choice: ProjectChoice = picked.kind === "selected" ? picked.value : {
-            name: picked.text.trim().split("/").filter(Boolean).at(-1) ?? picked.text.trim(),
-            ...(picked.text.trim().startsWith("/") ? { path: picked.text.trim() } : {})
-          }
-          if (!choice.name) return yield* Effect.fail(new AppError({ message: "Project name is required" }))
-          const host = draft.host
-          if (host) {
-            const found = yield* discover(host, command)
-            cloneRoots = found.roots
-            const inspected = yield* bindProject(choice, host, found.projects)
-            if (inspected) {
-              draft = changeProjectChoice(draft, choice)
-              draft = changeProject(draft, inspected.project)
-              if (inspected.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.checkout.path }
-            }
-            projects = [...projects.filter(item => item.source?.machineKey !== host.key ||
-              item.source.hostId !== host.hostId),
-              ...found.projects.map(repo => known(host, repo, found.checkout))]
-            sessions = found.sessions
-            if (!sessions.some(item => item.id === draft.sessionId))
-              draft = { ...draft, sessionId: sessions.length === 1 ? sessions[0]?.id : undefined }
-            draft = { ...draft, clientId: focusClient(found.clients) }
-          } else draft = changeProjectChoice(draft, choice)
-        } else if (action === "destination") {
-          if (!draft.host || !(draft.project || draft.clone)) return yield* Effect.fail(new AppError({ message: "Select a project and machine before choosing a worktree" }))
-          if (draft.clone) {
-            const clone = draft.clone
-            const picked = yield* inputChoice({
-              message: clone.vcs === "jj"
-                ? "Clone destination: absolute path or optional separate workspace name (none to clear)"
-                : "Clone destination: type absolute path; type checkout name for optional separate worktree",
-              choices: [
-                { value: clone.repo, title: "Current clone destination", description: clone.repo },
-                ...cloneRoots.map(root => ({ value: `${root.replace(/\/$/, "")}/${draft.projectChoice?.name ?? "project"}`,
-                  title: "Configured root suggestion", description: `${root.replace(/\/$/, "")}/${draft.projectChoice?.name ?? "project"}` }))
-              ]
-            })
-            if (picked.kind === "selected" || picked.text.startsWith("/")) {
-              const repo = picked.kind === "selected" ? picked.value : picked.text.trim()
-              draft = { ...draft, clone: { ...clone, repo } }
-            } else {
-              const name = picked.text.trim()
-              if (name === "none") draft = { ...draft, worktreeName: undefined }
-              else {
-                if (!name || /[\p{ASCII}&&\p{Cc}]/v.test(name) ||
-                    name.split(/[\\/]/).some(part => !part || part === "." || part === ".."))
-                  return yield* Effect.fail(new AppError({ message: "Type an absolute clone destination or valid checkout name (none to clear)" }))
-                draft = { ...draft, worktreeName: name }
-              }
-            }
-          } else {
-            const found = yield* inspectWorktrees(draft.host, command,
-              draft.project!.vcs === "jj" ? draft.sourcePath ?? draft.project!.path : draft.project!.path)
-            const trees = found.worktrees.filter(tree => tree.vcs === "jj" || !tree.bare && !tree.prunable)
-            const picked = yield* inputChoice<Worktree | "clone">({
-              message: draft.project!.vcs === "jj"
-                ? "Workspace (select existing, Clone this project, or type new workspace name)"
-                : "Worktree (select checkout, Clone this project, or type new directory name)",
-              choices: [
-                ...trees.map(tree => ({ value: tree, title: tree.vcs === "jj" ? tree.name
-                  : tree.path.split("/").filter(Boolean).at(-1) ?? tree.path,
-                  description: tree.vcs === "jj"
-                    ? tree.present && tree.path ? `${tree.changeId.slice(0, 12)} · ${tree.path}`
-                      : `Unavailable · ${tree.path ?? "location unknown"}`
-                    : `${tree.branch ?? "Detached HEAD"} · ${tree.path}` })),
-                ...(draft.projectChoice?.source ? [{ value: "clone" as const, title: "Clone this project…",
-                  description: "Choose a new absolute destination; only published history transfers" }] : [])
-              ]
-            })
-            if (picked.kind === "selected") {
-              if (picked.value === "clone") yield* cloneDestination(draft.projectChoice!, draft.host)
-              else {
-                if (picked.value.vcs === "jj" && (!picked.value.present || !picked.value.path))
-                  return yield* Effect.fail(new AppError({ message: `Workspace ${picked.value.name} is unavailable; inspect its registered location before opening` }))
-                draft = selectWorktree(draft, picked.value)
-              }
-            } else {
-              const name = picked.text.trim()
-              if (!name || name.startsWith("/") || /[\p{ASCII}&&\p{Cc}]/v.test(name) ||
-                  name.split(/[\\/]/).some(part => !part || part === "." || part === ".."))
-                return yield* Effect.fail(new AppError({ message: "Invalid workspace or worktree name" }))
-              const candidate = typeWorktreeName(draft, name,
-                draft.project!.vcs === "jj" ? found.revisions.find(choice => choice.expression === "trunk()") : undefined)
-              if (draft.project!.vcs === "git" && candidate.destination?.branch) {
-                const inspected = yield* inspectBranch(draft.host, command, draft.project!.path, candidate.destination.branch, name)
-                draft = resolveBranch(candidate, inspected.branch, inspected.path, inspected.existing)
-              } else draft = candidate
-            }
-          }
-        } else if (action === "branch") {
-          if (!draft.host || !(draft.project || draft.clone)) return yield* Effect.fail(new AppError({ message: "Select a project and machine before choosing a base or branch" }))
-          const jjClone = draft.clone?.vcs === "jj" ? draft.clone : undefined
-          if (draft.project?.vcs === "jj" || jjClone) {
-            if (draft.destination?.path) return yield* Effect.fail(new AppError({ message: "Opening an existing workspace does not change its revision" }))
-            const found = jjClone ? undefined : yield* inspectWorktrees(draft.host, command, draft.sourcePath ?? draft.project!.path)
-            const revisions = jjClone ? jjClone.revisions : found!.revisions
-            const picked = yield* inputChoice<JjRevisionChoice | null>({
-              message: jjClone ? "Start from source revision (or cloned default)" : "Start from revision for new workspace",
-              choices: [
-                ...(jjClone ? [{ value: null, title: "Cloned default", description: "Use the clone's native default" }] : []),
-                ...revisions.map(choice => ({ value: choice, title: choice.label,
-                  description: `${choice.expression} · ${choice.revision.commitId.slice(0, 12)}` }))
-              ]
-            })
-            if (picked.kind === "selected" && picked.value === null) draft = { ...draft, destination: undefined }
-            else {
-              let choice: JjRevisionChoice
-              if (picked.kind === "selected") choice = picked.value!
-              else {
-                const expression = picked.text.trim()
-                if (!expression) return yield* Effect.fail(new AppError({ message: "A singular starting revision is required" }))
-                let sourceHost = draft.host
-                let repo = draft.sourcePath ?? draft.project?.path
-                if (jjClone) {
-                  const reference = draft.projectChoice?.source
-                  const machine = machines.find(item => item.key === reference?.machineKey)
-                  if (!reference || !machine) return yield* Effect.fail(new AppError({ message: "Clone source machine is no longer registered" }))
-                  sourceHost = yield* connectMachine(machine)
-                  if (sourceHost.hostId !== reference.hostId || sourceHost.hostId !== jjClone.sourceHostId)
-                    return yield* Effect.fail(new AppError({ message: "Clone source host identity changed; reselect the project" }))
-                  repo = reference.checkoutPath ?? reference.repository.path
-                }
-                const revision: JjRevision = yield* inspectRevision(sourceHost, command, repo!, expression)
-                choice = { expression, label: expression, revision }
-              }
-              draft = selectRevision(draft, choice)
-              if (jjClone) draft = { ...draft, clone: { ...jjClone, revision: choice.revision } }
-            }
-          } else if (draft.clone?.vcs === "git") {
-            const picked = yield* inputChoice({
-              message: "Branch (select source branch or type new branch; only pushed history transfers)",
-              choices: draft.clone.branches.map(branch => ({ value: branch, title: branch,
-                description: "Use this branch from the cloned origin" }))
-            })
-            const branch = picked.kind === "selected" ? picked.value : picked.text.trim()
-            if (!branch || branch.startsWith("-") || /[\p{ASCII}&&\p{Cc}]/v.test(branch))
-              return yield* Effect.fail(new AppError({ message: "Branch name must be a valid Git branch" }))
-            draft = { ...draft, destination: { branch, label: branch } }
-          } else {
-            const found = yield* inspectWorktrees(draft.host, command, draft.project!.path)
-            const picked = yield* inputChoice({
-              message: "Branch (select existing or type new branch)",
-              choices: found.branches.map(branch => ({
-                value: branch, title: branch,
-                description: found.worktrees.find(tree => tree.vcs === "git" && tree.branch === branch)?.path ?? "Free branch — attach new checkout"
-              }))
-            })
-            const branch = picked.kind === "selected" ? picked.value : picked.text
-            if (!branch.trim()) return yield* Effect.fail(new AppError({ message: "Branch name is required" }))
-            const inspected = yield* inspectBranch(draft.host, command, draft.project!.path, branch, draft.worktreeName)
-            draft = resolveBranch(draft, inspected.branch, inspected.path, inspected.existing)
-          }
-        } else if (action === "session") {
-          if (!draft.host) return yield* Effect.fail(new AppError({ message: "Select a machine before choosing a session" }))
-          const found = yield* discover(draft.host, command)
-          sessions = found.sessions
-          if (!sessions.length) return yield* Effect.fail(new AppError({ message: "No Rex sessions available on selected machine" }))
-          draft = { ...draft, clientId: focusClient(found.clients) }
-          draft = { ...draft, sessionId: yield* choose("Exact Rex session",
-            sessions.map(item => selected(item.id, item.id === draft.sessionId, item.label, item.id))) }
-        } else if (action === "mode") {
-          draft = { ...draft, mode: yield* choose<Draft["mode"]>("Open mode", [
-            selected<Draft["mode"]>("auto", draft.mode === "auto", "Reuse matching tab", "Focus existing task, otherwise open new tab"),
-            selected<Draft["mode"]>("new-tab", draft.mode === "new-tab", "Always new tab"),
-            selected<Draft["mode"]>("split", draft.mode === "split", "Split matching task", "Opens new tab when no live target exists")
-          ]) }
+          return
         }
-      }))
-      if (Result.isFailure(editing)) {
-        submitAfterEdit = false
-        if (!Terminal.isQuitError(editing.failure)) error = problem(editing.failure)
-      } else {
-        if (draft.host) { error = undefined; yield* refresh }
-        queuedSubmit = submitAfterEdit && !formView().submitDisabled && (!draft.clone || hadCloneReview)
-        submitAfterEdit = false
+        if (view.rows.find(row => row.id === action)?.disabled) continue
+        const editing = yield* Effect.result(Effect.gen(function*() {
+          if (action === "machine") {
+            yield* loadMachines
+            if (!machines.length) return yield* Effect.fail(new AppError({ message: error ?? "No Rex machines available" }))
+            const machine = yield* choose("Execution machine", machines.map(item =>
+              selected(item, item.key === draft.machine?.key, item.label,
+                item.local ? "This machine" : `Rex host · ${item.selector}`)))
+            yield* activate(machine)
+          } else if (action === "project") {
+            const choices = projects.map(item => ({
+              value: item, title: item.name,
+              description: `${item.source?.repository.path ?? item.path ?? ""} · ${machines.find(machine => machine.key === item.source?.machineKey)?.label ?? "Source machine"}`
+            }))
+            const picked = yield* inputChoice({
+              message: "Project (select known or type name / absolute path)",
+              choices
+            })
+            const choice: ProjectChoice = picked.kind === "selected" ? picked.value : {
+              name: picked.text.trim().split("/").filter(Boolean).at(-1) ?? picked.text.trim(),
+              ...(picked.text.trim().startsWith("/") ? { path: picked.text.trim() } : {})
+            }
+            if (!choice.name) return yield* Effect.fail(new AppError({ message: "Project name is required" }))
+            const host = draft.host
+            if (host) {
+              const found = yield* discover(host, command)
+              cloneRoots = found.roots
+              const inspected = yield* bindProject(choice, host, found.projects)
+              if (inspected) {
+                draft = changeProjectChoice(draft, choice)
+                draft = changeProject(draft, inspected.project)
+                if (inspected.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.checkout.path }
+              }
+              projects = [...projects.filter(item => item.source?.machineKey !== host.key ||
+                item.source.hostId !== host.hostId),
+              ...found.projects.map(repo => known(host, repo, found.checkout))]
+              sessions = found.sessions
+              if (!sessions.some(item => item.id === draft.sessionId))
+                draft = { ...draft, sessionId: sessions.length === 1 ? sessions[0]?.id : undefined }
+              draft = { ...draft, clientId: focusClient(found.clients) }
+            } else draft = changeProjectChoice(draft, choice)
+          } else if (action === "destination") {
+            if (!draft.host || !(draft.project || draft.clone)) return yield* Effect.fail(new AppError({ message: "Select a project and machine before choosing a worktree" }))
+            if (draft.clone) {
+              const clone = draft.clone
+              const picked = yield* inputChoice({
+                message: clone.vcs === "jj"
+                  ? "Clone destination: absolute path or optional separate workspace name (none to clear)"
+                  : "Clone destination: type absolute path; type checkout name for optional separate worktree",
+                choices: [
+                  { value: clone.repo, title: "Current clone destination", description: clone.repo },
+                  ...cloneRoots.map(root => ({
+                    value: `${root.replace(/\/$/, "")}/${draft.projectChoice?.name ?? "project"}`,
+                    title: "Configured root suggestion", description: `${root.replace(/\/$/, "")}/${draft.projectChoice?.name ?? "project"}`
+                  }))
+                ]
+              })
+              if (picked.kind === "selected" || picked.text.startsWith("/")) {
+                const repo = picked.kind === "selected" ? picked.value : picked.text.trim()
+                draft = { ...draft, clone: { ...clone, repo } }
+              } else {
+                const name = picked.text.trim()
+                if (name === "none") draft = { ...draft, worktreeName: undefined }
+                else {
+                  if (!name || /[\p{ASCII}&&\p{Cc}]/v.test(name) ||
+                    name.split(/[\\/]/).some(part => !part || part === "." || part === ".."))
+                    return yield* Effect.fail(new AppError({ message: "Type an absolute clone destination or valid checkout name (none to clear)" }))
+                  draft = { ...draft, worktreeName: name }
+                }
+              }
+            } else {
+              const found = yield* inspectWorktrees(draft.host, command,
+                draft.project!.vcs === "jj" ? draft.sourcePath ?? draft.project!.path : draft.project!.path)
+              const trees = found.worktrees.filter(tree => tree.vcs === "jj" || !tree.bare && !tree.prunable)
+              const picked = yield* inputChoice<Worktree | "clone">({
+                message: draft.project!.vcs === "jj"
+                  ? "Workspace (select existing, Clone this project, or type new workspace name)"
+                  : "Worktree (select checkout, Clone this project, or type new directory name)",
+                choices: [
+                  ...trees.map(tree => ({
+                    value: tree, title: tree.vcs === "jj" ? tree.name
+                      : tree.path.split("/").filter(Boolean).at(-1) ?? tree.path,
+                    description: tree.vcs === "jj"
+                      ? tree.present && tree.path ? `${tree.changeId.slice(0, 12)} · ${tree.path}`
+                        : `Unavailable · ${tree.path ?? "location unknown"}`
+                      : `${tree.branch ?? "Detached HEAD"} · ${tree.path}`
+                  })),
+                  ...(draft.projectChoice?.source ? [{
+                    value: "clone" as const, title: "Clone this project…",
+                    description: `Propose ${clonePath(draft.projectChoice)} · only pushed history transfers`
+                  }] : [])
+                ]
+              })
+              if (picked.kind === "selected") {
+                if (picked.value === "clone") yield* cloneDestination(draft.projectChoice!, draft.host)
+                else {
+                  if (picked.value.vcs === "jj" && (!picked.value.present || !picked.value.path))
+                    return yield* Effect.fail(new AppError({ message: `Workspace ${picked.value.name} is unavailable; inspect its registered location before opening` }))
+                  draft = selectWorktree(draft, picked.value)
+                }
+              } else {
+                const name = picked.text.trim()
+                if (!name || name.startsWith("/") || /[\p{ASCII}&&\p{Cc}]/v.test(name) ||
+                  name.split(/[\\/]/).some(part => !part || part === "." || part === ".."))
+                  return yield* Effect.fail(new AppError({ message: "Invalid workspace or worktree name" }))
+                draft = typeWorktreeName(draft, name,
+                  draft.project!.vcs === "jj" ? found.revisions.find(choice => choice.expression === "trunk()") : undefined)
+              }
+            }
+          } else if (action === "branch") {
+            if (!draft.host || !(draft.project || draft.clone)) return yield* Effect.fail(new AppError({ message: "Select a project and machine before choosing a base or branch" }))
+            const jjClone = draft.clone?.vcs === "jj" ? draft.clone : undefined
+            if (draft.project?.vcs === "jj" || jjClone) {
+              if (draft.destination?.path) return yield* Effect.fail(new AppError({ message: "Opening an existing workspace does not change its revision" }))
+              const found = jjClone ? undefined : yield* inspectWorktrees(draft.host, command, draft.sourcePath ?? draft.project!.path)
+              const revisions = jjClone ? jjClone.revisions : found!.revisions
+              const picked = yield* inputChoice<JjRevisionChoice | null>({
+                message: jjClone ? "Start from source revision (or cloned default)" : "Start from revision for new workspace",
+                choices: [
+                  ...(jjClone ? [{ value: null, title: "Cloned default", description: "Use the clone's native default" }] : []),
+                  ...revisions.map(choice => ({
+                    value: choice, title: choice.label,
+                    description: `${choice.expression} · ${choice.revision.commitId.slice(0, 12)}`
+                  }))
+                ]
+              })
+              if (picked.kind === "selected" && picked.value === null) draft = { ...draft, destination: undefined }
+              else {
+                let choice: JjRevisionChoice
+                if (picked.kind === "selected") choice = picked.value!
+                else {
+                  const expression = picked.text.trim()
+                  if (!expression) return yield* Effect.fail(new AppError({ message: "A singular starting revision is required" }))
+                  let sourceHost = draft.host
+                  let repo = draft.sourcePath ?? draft.project?.path
+                  if (jjClone) {
+                    const reference = draft.projectChoice?.source
+                    const machine = machines.find(item => item.key === reference?.machineKey)
+                    if (!reference || !machine) return yield* Effect.fail(new AppError({ message: "Clone source machine is no longer registered" }))
+                    sourceHost = yield* connectMachine(machine)
+                    if (sourceHost.hostId !== reference.hostId || sourceHost.hostId !== jjClone.sourceHostId)
+                      return yield* Effect.fail(new AppError({ message: "Clone source host identity changed; reselect the project" }))
+                    repo = reference.checkoutPath ?? reference.repository.path
+                  }
+                  const revision: JjRevision = yield* inspectRevision(sourceHost, command, repo!, expression)
+                  choice = { expression, label: expression, revision }
+                }
+                draft = selectRevision(draft, choice)
+                if (jjClone) draft = { ...draft, clone: { ...jjClone, revision: choice.revision } }
+              }
+            } else if (draft.clone?.vcs === "git") {
+              const picked = yield* inputChoice({
+                message: "Branch (select source branch or type new branch; only pushed history transfers)",
+                choices: draft.clone.branches.map(branch => ({
+                  value: branch, title: branch,
+                  description: "Use this branch from the cloned origin"
+                }))
+              })
+              const branch = picked.kind === "selected" ? picked.value : picked.text.trim()
+              if (!branch || branch.startsWith("-") || /[\p{ASCII}&&\p{Cc}]/v.test(branch))
+                return yield* Effect.fail(new AppError({ message: "Branch name must be a valid Git branch" }))
+              draft = { ...draft, destination: { branch, label: branch } }
+            } else {
+              const found = yield* inspectWorktrees(draft.host, command, draft.project!.path)
+              const picked = yield* inputChoice({
+                message: "Branch (select existing or type new branch)",
+                choices: found.branches.map(branch => ({
+                  value: branch, title: branch,
+                  description: found.worktrees.find(tree => tree.vcs === "git" && tree.branch === branch)?.path ?? "Free branch — attach new checkout"
+                }))
+              })
+              const branch = (picked.kind === "selected" ? picked.value : picked.text).trim()
+              if (!branch) return yield* Effect.fail(new AppError({ message: "Branch name is required" }))
+              const existing = found.worktrees.find(tree => tree.vcs === "git" && tree.branch === branch && !tree.bare && !tree.prunable)
+              draft = existing?.vcs === "git" ? resolveBranch(draft, branch, existing.path, true)
+                : changeDestination(draft, { branch, label: branch }, draft.worktreeName)
+            }
+          } else if (action === "session") {
+            if (!draft.host) return yield* Effect.fail(new AppError({ message: "Select a machine before choosing a session" }))
+            const found = yield* discover(draft.host, command)
+            sessions = found.sessions
+            if (!sessions.length) return yield* Effect.fail(new AppError({ message: "No Rex sessions available on selected machine" }))
+            draft = { ...draft, clientId: focusClient(found.clients) }
+            draft = {
+              ...draft, sessionId: yield* choose("Exact Rex session",
+                sessions.map(item => selected(item.id, item.id === draft.sessionId, item.label, item.id)))
+            }
+          } else if (action === "mode") {
+            draft = {
+              ...draft, mode: yield* choose<Draft["mode"]>("Open mode", [
+                selected<Draft["mode"]>("auto", draft.mode === "auto", "Reuse matching tab", "Focus existing task, otherwise open new tab"),
+                selected<Draft["mode"]>("new-tab", draft.mode === "new-tab", "Always new tab"),
+                selected<Draft["mode"]>("split", draft.mode === "split", "Split matching task", "Opens new tab when no live target exists")
+              ])
+            }
+          }
+        }))
+        if (Result.isFailure(editing)) {
+          if (!Terminal.isQuitError(editing.failure)) error = problem(editing.failure)
+        } else {
+          error = undefined
+          plan = undefined
+          clonePlan = undefined
+        }
       }
-    }
     }).pipe(Effect.catchCause(cause => Cause.hasInterrupts(cause) || launchAcknowledged
       ? Effect.failCause(cause)
       : acknowledge("Could not open worktrees", [Cause.pretty(cause)], "error")
