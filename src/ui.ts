@@ -223,9 +223,6 @@ export const typeWorktreeName = (draft: Draft, name: string, mainline?: JjRevisi
     draft.project?.vcs === "jj" && !draft.clone && mainline
       ? { revision: mainline.revision.commitId, label: mainline.label } : undefined
 })
-export const resolveBranch = (draft: Draft, branch: string, path: string, existing: boolean): Draft => existing
-  ? changeDestination(draft, { path, label: path.split("/").filter(Boolean).at(-1) ?? path })
-  : changeDestination(draft, { branch, label: branch }, draft.worktreeName ?? branch)
 export const selectRevision = (draft: Draft, choice: JjRevisionChoice): Draft =>
   changeDestination(draft, { revision: choice.revision.commitId, label: choice.label }, draft.worktreeName)
 
@@ -573,26 +570,12 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (action === "submit") {
           const cloneInput = cloneInputFor(draft)
           if (!draft.host || !(cloneInput || inputFor(draft))) continue
-          if (cloneInput && !clonePlan) {
-            const reviewed = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
-            if (Result.isFailure(reviewed)) { error = problem(reviewed.failure); continue }
-            clonePlan = reviewed.success
-            error = undefined
-            continue
-          }
-          if (!cloneInput && !plan) {
-            const reviewed = yield* Effect.result(review(draft.host, command, inputFor(draft)!))
-            if (Result.isFailure(reviewed)) { error = problem(reviewed.failure); continue }
-            plan = reviewed.success
-            error = undefined
-            continue
-          }
-          if (draft.host && cloneInput && clonePlan) {
+          if (cloneInput) {
             const current = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
             if (Result.isFailure(current)) { error = problem(current.failure); clonePlan = undefined; continue }
-            if (!sameClonePlan(current.success, clonePlan)) {
+            if (!clonePlan || !sameClonePlan(current.success, clonePlan)) {
+              error = clonePlan ? "Clone destination or Rex target changed; review the updated URL and destination before submitting again" : undefined
               clonePlan = current.success
-              error = "Clone destination or Rex target changed; review the updated URL and destination before submitting again"
               continue
             }
             const launched = yield* Effect.result(submitClone(draft.host, command, cloneInput, clonePlan))
@@ -610,12 +593,12 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             return
           }
           const input = inputFor(draft)
-          if (!draft.host || !input || !plan) continue
+          if (!input) continue
           const current = yield* Effect.result(review(draft.host, command, input))
           if (Result.isFailure(current)) { error = problem(current.failure); plan = undefined; continue }
-          if (!sameLaunchPlan(current.success, plan)) {
+          if (!plan || !sameLaunchPlan(current.success, plan)) {
+            error = plan ? "Destination or Rex target changed; review the updated action before submitting again" : undefined
             plan = current.success
-            error = "Destination or Rex target changed; review the updated action before submitting again"
             continue
           }
           const launched = yield* Effect.result(submit(draft.host, command, input, plan))
@@ -810,7 +793,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
               const branch = (picked.kind === "selected" ? picked.value : picked.text).trim()
               if (!branch) return yield* Effect.fail(new AppError({ message: "Branch name is required" }))
               const existing = found.worktrees.find(tree => tree.vcs === "git" && tree.branch === branch && !tree.bare && !tree.prunable)
-              draft = existing?.vcs === "git" ? resolveBranch(draft, branch, existing.path, true)
+              draft = existing?.vcs === "git" ? selectWorktree(draft, existing)
                 : changeDestination(draft, { branch, label: branch }, draft.worktreeName)
             }
           } else if (action === "session") {

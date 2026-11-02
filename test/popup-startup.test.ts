@@ -43,8 +43,7 @@ async function withPopup(
   kind: "pending" | "failure" | "edit" | "collision" | "permission" | "unsafe" | "connect",
   run: (pty: {
     output: () => string;
-    waitForText: (text: string) => Promise<void>;
-    waitForOutput: (predicate: (output: string) => boolean) => Promise<void>;
+    waitForText: (text: string | RegExp) => Promise<void>;
     write: (input: string) => void;
     exitCode: () => number | null;
     exited: Promise<number>;
@@ -137,7 +136,7 @@ async function withPopup(
       output: () => output,
       waitForText: (text) =>
         waitFor(
-          () => output.includes(text),
+          () => typeof text === "string" ? output.includes(text) : text.test(output),
           (notify) => {
             listeners.add(notify);
             return () => {
@@ -145,13 +144,6 @@ async function withPopup(
             };
           },
         ),
-      waitForOutput: (predicate) => waitFor(
-        () => predicate(output),
-        (notify) => {
-          listeners.add(notify);
-          return () => { listeners.delete(notify); };
-        },
-      ),
       write: (input) => proc.terminal!.write(input),
       exitCode: () => proc.exitCode,
       exited: proc.exited,
@@ -209,7 +201,7 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
       pty.write("\t\t\t\t\t\r"); // Select Mode from the form.
       await pty.waitForText("Open mode");
       pty.write(`\x1b[B${accept}`); // Choose Always new tab and accept from the editor.
-      await pty.waitForOutput(output => /MODE\s+Always new tab/.test(output));
+      await pty.waitForText(/MODE\s+Always new tab/);
       expect(pty.exitCode()).toBeNull();
       expect(pty.output()).not.toContain("REVIEW_CALLED");
       expect(pty.output()).not.toContain("LAUNCH_CALLED");
