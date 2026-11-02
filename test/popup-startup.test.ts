@@ -304,13 +304,12 @@ it("flat ordinary form edits Mode directly without launching from its editor", a
 
 it("typing an occupied Git branch opens its exact existing checkout", async () => {
   await withPopup("edit", async (pty) => {
-    await pty.waitForText(/CHECKOUT\s+alpha/);
-    await pty.waitForText("Esc close");
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
     pty.write("\t\t\r");
-    await pty.waitForText("Checkout (");
+    await pty.waitForEditor("Checkout (");
     const before = pty.output().length;
     pty.write("main\r");
-    await pty.waitForText(/CHECKOUT\s+alpha/, before);
+    await pty.waitForForm(/CHECKOUT\s+alpha/, before);
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x13");
     expect(await pty.exited).toBe(0);
