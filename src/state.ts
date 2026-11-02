@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { Effect, FileSystem, Path, PlatformError, Schema } from "effect";
-import { AssociationSchema, type Association } from "./contracts.ts";
+import { AppError, AssociationSchema, type Association } from "./contracts.ts";
 const cloneRootFile = Effect.fnUntraced(function*(stateRoot?: string) {
   const path = yield* Path.Path;
   const root = stateRoot ?? process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state");
-  if (!path.isAbsolute(root)) return yield* Effect.fail(new Error("State home must be absolute"));
+  if (!path.isAbsolute(root)) return yield* new AppError({ message: "State home must be absolute" });
   return path.join(root, "rex-worktrees", "clone-root.json");
 });
 
@@ -31,7 +31,7 @@ export const rememberedCloneRoot = Effect.fnUntraced(function*(stateRoot?: strin
 export const rememberCloneRoot = Effect.fnUntraced(function*(parent: string, stateRoot?: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!path.isAbsolute(parent) || path.resolve(parent) !== parent) return yield* Effect.fail(new Error("Clone parent must be normalized and absolute"));
+  if (!path.isAbsolute(parent) || path.resolve(parent) !== parent) return yield* new AppError({ message: "Clone parent must be normalized and absolute" });
   const filename = yield* cloneRootFile(stateRoot);
   yield* fs.makeDirectory(path.dirname(filename), { recursive: true, mode: 0o700 });
   const temporary = `${filename}.${randomUUID()}.tmp`;
