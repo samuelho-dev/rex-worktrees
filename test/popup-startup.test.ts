@@ -242,7 +242,7 @@ it("duplicate session labels still select the exact second ID", async () => {
     pty.write("\t\t\t\t\r");
     await pty.waitForText("Session (select existing or type new name)");
     pty.write("\x1b[B\x1b[B\r");
-    await pty.waitForText("session-second");
+    await pty.waitForText(/SESSION\s+Same label/); // Wait for the form, not the ID already rendered in the editor's options.
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x13");
     await pty.waitForText("Review this action");
