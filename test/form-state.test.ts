@@ -16,7 +16,6 @@ import {
   cloneInputFor,
   generatedName,
   inputFor,
-  resolveBranch,
   selectRevision,
   selectWorktree,
   typeWorktreeName,
@@ -61,7 +60,7 @@ const ready = (): Draft => ({
   host: local,
   projectChoice,
   project: first,
-  sessionId,
+  session: { kind: "existing", id: sessionId },
   clientId,
   mode: "split",
 });
@@ -84,35 +83,42 @@ it("logical project survives machine failure but old physical target cannot laun
       ...changed,
       project: other,
       destination: { branch: "feature", label: "feature" },
-      sessionId,
+      session: { kind: "existing", id: sessionId },
     }),
   ).toBeUndefined();
   expect(changeMachine(draft, local)).toEqual(draft);
 });
 
 it("project choice invalidates checkout and branch, but same-host binding retains session", () => {
-  const draft = resolveBranch(
+  const draft = changeDestination(
     { ...ready(), worktreeName: "task-alpha" },
-    "feature",
-    "/projects/alpha.worktrees/task-alpha",
-    false,
+    { branch: "feature", label: "feature" },
+    "task-alpha",
   );
   const changed = changeProjectChoice(draft, { name: "beta" });
   expect(changed.project).toBeUndefined();
   expect(changed.destination).toBeUndefined();
   expect(changed.worktreeName).toBeUndefined();
-  expect(changed.sessionId).toBe("session-local");
+  expect(changed.session).toEqual({ kind: "existing", id: sessionId });
   expect(changeProject(draft, alias).destination).toEqual(draft.destination);
   expect(changeProject(draft, other).destination).toBeUndefined();
   expect(inputFor(changed)).toBeUndefined();
 });
 
+it("typed session name remains new intent even when an existing session has the same label", () => {
+  const draft = {
+    ...ready(), session: { kind: "new" as const, name: "Same label" },
+    destination: { branch: "feature", label: "feature" }
+  };
+  expect(inputFor(draft)?.session).toEqual({ kind: "new", name: "Same label" });
+  expect(changeMachine(draft, remote).session).toBeUndefined();
+});
+
 it("directory name and Git branch remain independent, while occupied branch uses actual checkout", () => {
-  const named = resolveBranch(
+  const named = changeDestination(
     typeWorktreeName(ready(), "task-name"),
-    "feature/topic",
-    "/projects/alpha.worktrees/task-name",
-    false,
+    { branch: "feature/topic", label: "feature/topic" },
+    "task-name",
   );
   expect(inputFor(named)).toMatchObject({
     branch: "feature/topic",
@@ -122,7 +128,10 @@ it("directory name and Git branch remain independent, while occupied branch uses
     additional: false,
   });
   expect(generatedName(named)).toBe("task-name");
-  const redirected = resolveBranch(named, "main", first.path, true);
+  const redirected = selectWorktree(named, {
+    vcs: "git", path: first.path, branch: "main", head: "abc",
+    bare: false, locked: false, prunable: false,
+  });
   expect(inputFor(redirected)).toMatchObject({
     path: first.path,
     name: "alpha",
@@ -141,8 +150,10 @@ it("clone draft uses logical source and exact target, without fabricating a targ
   const clone: Draft = {
     ...ready(),
     project: undefined,
-    clone: { url: "https://example.com/alpha.git", sourceHostId: local.hostId,
-      vcs: "git", branches: ["main", "feature/pushed"], branch: "main", repo: "/target/alpha" },
+    clone: {
+      url: "https://example.com/alpha.git", sourceHostId: local.hostId,
+      vcs: "git", branches: ["main", "feature/pushed"], branch: "main", repo: "/target/alpha"
+    },
     destination: { branch: "feature/pushed", label: "feature/pushed" },
     worktreeName: "alpha-feature",
   };
@@ -150,13 +161,13 @@ it("clone draft uses logical source and exact target, without fabricating a targ
   expect(cloneInputFor(clone)).toMatchObject({
     repo: "/target/alpha", source: { sourceHostId: local.hostId, url: "https://example.com/alpha.git" },
     branch: "feature/pushed", branchMode: "existing", worktreeName: "alpha-feature",
-    sessionId, clientId,
+    session: { kind: "existing", id: sessionId }, clientId,
   });
   const newBranch = cloneInputFor({ ...clone, destination: { branch: "new-feature", label: "new-feature" } });
   if (newBranch?.vcs !== "git") throw new Error("Expected Git clone input");
   expect(newBranch.branchMode).toBe("create");
   expect(changeMachine(clone, remote).clone).toBeUndefined();
-  expect(changeMachine(clone, remote).sessionId).toBeUndefined();
+  expect(changeMachine(clone, remote).session).toBeUndefined();
   expect(changeProjectChoice(clone, { name: "beta" }).clone).toBeUndefined();
   expect(changeProject(clone, other).clone).toBeUndefined();
 });
@@ -170,9 +181,11 @@ const mainlineRevision = Schema.decodeUnknownSync(JjRevisionSchema)({
   commitId: "b".repeat(40), changeId: "m".repeat(32), description: "configured trunk"
 });
 const mainline = { expression: "trunk()", label: "Mainline · bbbbbbbbbbbb · configured trunk", revision: mainlineRevision };
-const jjDraft = (): Draft => ({ ...ready(), project: jj, projectChoice: {
-  name: jj.name, source: { machineKey: local.key, hostId: local.hostId, repository: jj }
-} });
+const jjDraft = (): Draft => ({
+  ...ready(), project: jj, projectChoice: {
+    name: jj.name, source: { machineKey: local.key, hostId: local.hostId, repository: jj }
+  }
+});
 
 it("JJ existing workspace opens by exact path without a writable base", () => {
   const tree = Schema.decodeUnknownSync(JjWorktreeSchema)({
@@ -180,7 +193,7 @@ it("JJ existing workspace opens by exact path without a writable base", () => {
     head: "a".repeat(40), changeId: "k".repeat(32), present: true, colocated: false
   });
   const opened = selectWorktree(jjDraft(), tree);
-  expect(inputFor(opened)).toMatchObject({ vcs: "jj", path: tree.path, repo: tree.path, sessionId });
+  expect(inputFor(opened)).toMatchObject({ vcs: "jj", path: tree.path, repo: tree.path, session: { kind: "existing", id: sessionId } });
   expect(opened.projectChoice?.name).toBe(jj.name);
   expect(opened.projectChoice?.source?.repository).toEqual(jj);
   expect(opened.projectChoice?.source?.checkoutPath).toBe(tree.path);
@@ -244,10 +257,12 @@ it("source workspace identity stays local to its host and logical project", () =
 it("JJ clone uses source-resolved full commit ID or the cloned default, not source-relative expressions", () => {
   const draft: Draft = {
     ...jjDraft(), project: undefined,
-    clone: { vcs: "jj", url: "https://example.com/alpha.git", sourceHostId: local.hostId,
-      revisions: [base], repo: "/target/alpha" }
+    clone: {
+      vcs: "jj", url: "https://example.com/alpha.git", sourceHostId: local.hostId,
+      revisions: [base], repo: "/target/alpha"
+    }
   };
-  expect(cloneInputFor(draft)).toMatchObject({ vcs: "jj", repo: "/target/alpha", sessionId, clientId });
+  expect(cloneInputFor(draft)).toMatchObject({ vcs: "jj", repo: "/target/alpha", session: { kind: "existing", id: sessionId }, clientId });
   expect(cloneInputFor(draft)).not.toHaveProperty("revision");
   const pinned = selectRevision({ ...draft, worktreeName: "topic" }, base);
   expect(cloneInputFor(pinned)).toMatchObject({

@@ -34,7 +34,7 @@ export const connectMachine = Effect.fnUntraced(function*(machine: Machine) {
 });
 
 const request = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], body: RequestBody) {
-  const encoded: Request = { version: 3, hostId: host.hostId, ...body };
+  const encoded: Request = { version: 4, hostId: host.hostId, ...body };
   let response: Response;
   if (host.local) {
     response = yield* dispatchHost(encoded, command);
@@ -44,8 +44,8 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
     const raw = yield* remoteRex(current.selector, ["do", "worktrees_request", "--args", JSON.stringify({ request: JSON.stringify(encoded) }), "--json"]);
     response = yield* Schema.decodeUnknownEffect(RexWorktreesResponseSchema)(raw);
   }
-  if (response.hostId !== host.hostId || response.version !== 3 ||
-      response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
+  if (response.hostId !== host.hostId || response.version !== 4 ||
+    response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
     return yield* fail(`Unexpected Rex host/protocol response from ${host.label}; update rex-worktrees on that machine, run setup, and reload its Rex config`);
   return response;
 });
@@ -53,7 +53,7 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
 export const discover = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], context?: string) {
   const result = yield* request(host, command, { kind: "discover", ...(host.local && context ? { context } : {}) });
   if (result.kind !== "discover") return yield* fail("Unexpected discovery response");
-  return { sessions: result.sessions, clients: result.clients, projects: result.projects, roots: result.roots ?? [], ...(result.checkout ? { checkout: result.checkout } : {}) };
+  return { sessions: result.sessions, clients: result.clients, projects: result.projects, roots: result.roots ?? [], cloneRoot: result.cloneRoot, ...(result.checkout ? { checkout: result.checkout } : {}) };
 });
 export const inspectProject = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], path: string) {
   const result = yield* request(host, command, { kind: "project", path });
@@ -70,11 +70,6 @@ export const inspectRevision = Effect.fnUntraced(function*(host: DestinationHost
   const result = yield* request(host, command, { kind: "revision", repo, revision });
   if (result.kind !== "revision") return yield* fail("Unexpected revision response");
   return result.revision;
-});
-export const inspectBranch = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], repo: string, branch: string, worktreeName?: string) {
-  const result = yield* request(host, command, { kind: "branch", repo, branch, ...(worktreeName !== undefined ? { worktreeName } : {}) });
-  if (result.kind !== "branch") return yield* fail("Unexpected branch response");
-  return { path: result.path, branch: result.branch, existing: result.existing };
 });
 export const review = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], input: LaunchInput) {
   const result = yield* request(host, command, { kind: "plan", input });
