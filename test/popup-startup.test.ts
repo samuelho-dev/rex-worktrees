@@ -141,7 +141,7 @@ async function withPopup(
     env,
     terminal: {
       cols: kind === "long" ? 60 : 96,
-      rows: kind === "long" ? 18 : 24,
+      rows: kind === "long" ? 18 : kind === "edit" ? 16 : 24,
       data: (_, bytes) => {
         output += new TextDecoder().decode(bytes);
         for (const listener of listeners) listener();
@@ -181,7 +181,7 @@ for (const [name, input] of [
 ]) {
   it(`initial form ${name} interrupts discovery without starting a task`, async () => {
     await withPopup("pending", async (pty) => {
-      await pty.waitForText("OPTIONS");
+      await pty.waitForText("MODE");
       expect(pty.exitCode()).toBeNull();
       pty.write(input);
       expect(await pty.exited).toBe(0);
@@ -192,7 +192,7 @@ for (const [name, input] of [
 
 it("initial form submit stays disabled while discovery runs and Esc still cancels", async () => {
   await withPopup("pending", async (pty) => {
-    await pty.waitForText("OPTIONS");
+    await pty.waitForText("MODE");
     pty.write("\x13");
     expect(pty.exitCode()).toBeNull();
     pty.write("\x1b");
@@ -259,6 +259,23 @@ for (const [name, input, frame, selection, needsReview] of [
   }, 8000);
 }
 
+it("flat ordinary form edits Mode directly without launching from its editor", async () => {
+  await withPopup("edit", async (pty) => {
+    await pty.waitForText(/CHECKOUT\s+alpha/);
+    await pty.waitForText("Esc close");
+    expect(pty.output()).toContain("MODE");
+    expect(pty.output()).not.toContain("OPTIONS");
+    pty.write("\t\t\t\t\r");
+    await pty.waitForText("Open mode");
+    pty.write("Always new tab\x1b[B\r");
+    await pty.waitForText(/MODE\s+Always new tab/);
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
 it("typing an occupied Git branch opens its exact existing checkout", async () => {
   await withPopup("edit", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
@@ -276,21 +293,25 @@ it("typing an occupied Git branch opens its exact existing checkout", async () =
   });
 }, 8000);
 
-it("typed Git branch uses a separate optional directory name and requires review", async () => {
+it("typed Git branch shows an independent directory row and requires review", async () => {
   await withPopup("edit", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
     await pty.waitForText("Esc close");
-    expect(pty.output()).toContain("OPTIONS");
+    expect(pty.output()).toContain("MODE");
+    expect(pty.output()).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("  DIRECTORY  ");
-    expect(pty.output()).not.toContain("MODE");
     pty.write("\t\t\r");
     await pty.waitForText("Checkout (");
+    const beforeBranch = pty.output().length;
     pty.write("feature/free\r");
-    await pty.waitForText(/CHECKOUT\s+feature\/free/);
+    await pty.waitForText("Esc close", beforeBranch);
+    const branchFrame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    expect(branchFrame).toMatch(/CHECKOUT\s+feature\/free/);
+    expect(branchFrame).toMatch(/DIRECTORY\s+Default/);
+    expect(branchFrame).toContain("MODE");
+    expect(branchFrame).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\t\t\r");
-    await pty.waitForText(/DIRECTORY\s+Default/);
-    pty.write("\t\r");
     await pty.waitForText("Optional custom checkout directory name");
     pty.write("custom-tree\r");
     await pty.waitForText(/DIRECTORY\s+custom-tree/);
@@ -357,7 +378,7 @@ it("a new JJ workspace retains its name when the starting revision changes", asy
   });
 }, 8000);
 
-it("a detached clone exposes required Branch without expanding Options", async () => {
+it("a detached clone exposes required Branch in the flat form", async () => {
   await withPopup("detached", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
     await pty.waitForText("Esc close");
@@ -366,7 +387,11 @@ it("a detached clone exposes required Branch without expanding Options", async (
     pty.write("\x1b[B\r");
     await pty.waitForText(/CLONE TO\s+\/clones\/alpha/);
     await pty.waitForText("Esc close");
-    expect(pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"))).toMatch(/BRANCH\s+Select or type branch/);
+    const cloneFrame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    expect(cloneFrame).toMatch(/BRANCH\s+Select or type branch/);
+    expect(cloneFrame).toMatch(/DIRECTORY\s+Default/);
+    expect(cloneFrame).not.toContain("MODE");
+    expect(cloneFrame).not.toContain("OPTIONS");
     pty.write("\t\r");
     await pty.waitForText("Clone to (absolute destination");
     pty.write("/safe/alpha\r");
@@ -411,9 +436,7 @@ it("clone path editor cannot launch; optional checkout name remains independent"
     await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
     expect(pty.output()).not.toContain("REVIEW_CLONE");
     expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\t\t\r");
-    await pty.waitForText(/DIRECTORY\s+Default/);
-    pty.write("\t\r");
+    pty.write("\t\t\t\r");
     await pty.waitForText("Optional custom checkout directory name");
     pty.write("separate-checkout\r");
     await pty.waitForText(/DIRECTORY\s+separate-checkout/);
@@ -454,7 +477,7 @@ for (const [kind, diagnostic] of [
       pty.write("\x13");
       await pty.waitForText(diagnostic);
       expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-      pty.write("\x1b[Z\x1b[Z\x1b[Z\r");
+      pty.write("\x1b[Z\x1b[Z\x1b[Z\x1b[Z\r");
       await pty.waitForText("Clone to (absolute destination");
       pty.write("/safe/alpha\r");
       await pty.waitForText(/CLONE TO\s+\/safe\/alpha/);
