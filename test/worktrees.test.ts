@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "@effect/vitest";
 import {
   access,
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -32,7 +33,7 @@ import {
 } from "../src/git.ts";
 import { discoverProjects } from "../src/repositories.ts";
 import { ServerHostIdSchema, SessionIdSchema, type GitClonePlan, type Environment } from "../src/contracts.ts";
-import { cloneDestination, prepareCloneCheckout } from "../src/worktrees.ts";
+import { checkCloneParent, cloneDestination, prepareCloneCheckout } from "../src/worktrees.ts";
 import * as jj from "../src/jj.ts";
 
 const temporary: string[] = [];
@@ -60,7 +61,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function fixture(name = "repo with space") {
-  return Effect.gen(function* () {
+  return Effect.gen(function*() {
     const root = yield* Effect.promise(() =>
       mkdtemp(join(tmpdir(), "rex worktrees ")),
     ).pipe(Effect.flatMap((path) => Effect.promise(() => realpath(path))));
@@ -80,7 +81,7 @@ function fixture(name = "repo with space") {
 it.live(
   "new worktree never switches, stages, or edits the source checkout",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { repo } = yield* fixture();
       yield* Effect.promise(() => writeFile(join(repo, "tracked"), "staged\n"));
       git(repo, "add", "tracked");
@@ -130,7 +131,7 @@ it.live(
 it.live(
   "named checkout path is independent of branch, with no source checkout mutation",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const configuredRoot = join(root, "configured worktrees");
       const source = git(repo, "rev-parse", "HEAD");
@@ -176,7 +177,7 @@ it.live(
 it.live(
   "invalid checkout names cannot escape or mutate the checkout root or Git branches",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const configuredRoot = join(root, "configured worktrees");
       for (const name of [
@@ -215,7 +216,7 @@ it.live(
 it.live(
   "reviewed new branch uses the pinned source commit after HEAD advances",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { repo } = yield* fixture();
       const reviewed = git(repo, "rev-parse", "HEAD").trim();
       yield* Effect.promise(() =>
@@ -241,7 +242,7 @@ it.live(
 it.live(
   "reviewed new branch refuses a branch that appeared, even when checked out elsewhere",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { repo } = yield* fixture();
       const reviewed = git(repo, "rev-parse", "HEAD").trim();
       git(repo, "branch", "appeared");
@@ -267,7 +268,7 @@ it.live(
 it.live(
   "reviewed attach refuses to recreate a branch deleted before the task",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { repo } = yield* fixture();
       git(repo, "branch", "free");
       git(repo, "branch", "-d", "free");
@@ -290,7 +291,7 @@ it.live(
 it.live(
   "existing branches, linked checkouts, and hostile inherited GIT_DIR stay isolated",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture("repo with space\nand newline");
       git(repo, "branch", "free");
       expect((yield* listBranches(repo)).sort()).toEqual(["free", "main"]);
@@ -332,7 +333,7 @@ it.live(
 it.live(
   "invalid branches, occupied paths, and symlink ancestors fail without replacing data",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       for (const name of ["-bad", "../bad", "a/../b", "bad name", "a//b"]) {
         yield* Effect.flip(planWorktree(repo, name));
@@ -364,7 +365,7 @@ it.live(
 it.live(
   "nested context chooses its containing repository without scanning sibling repositories",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const nested = join(repo, "src", "deep");
       yield* Effect.promise(() => mkdir(nested, { recursive: true }));
@@ -391,7 +392,7 @@ it.live(
 it.live(
   "linked checkout context presents the primary project without changing checkout identity",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture("main project with spaces");
       const linked = join(root, "linked-checkout");
       git(repo, "worktree", "add", "-b", "feature", linked);
@@ -428,7 +429,7 @@ it.live(
 it.live(
   "bare primary retains the accessible checkout under the primary project name",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const bare = join(root, "primary project.git");
       git(root, "init", "--bare", bare);
@@ -448,7 +449,7 @@ it.live(
 );
 
 it.live("separate clones of the same remote remain separate projects", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo } = yield* fixture();
     const clone = join(root, "another clone");
     git(root, "clone", repo, clone);
@@ -464,7 +465,7 @@ it.live("separate clones of the same remote remain separate projects", () =>
 it.live(
   "host-local roots match linked checkouts by Git identity, not clone URL or current directory",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const clone = join(root, "another clone");
       git(root, "clone", repo, clone);
@@ -528,7 +529,7 @@ it.live(
 it.live(
   "explicit roots reject checkout containment, collisions, and symlink escapes before changing Git",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       expect(
         (yield* Effect.flip(planWorktree(repo, "relative", "relative/root")))
@@ -614,7 +615,7 @@ it.live(
 it.live(
   "a branch destination cannot enter a separate Git metadata directory",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const { root, repo } = yield* fixture();
       const metadata = join(root, "metadata");
       const checkout = join(root, "separate checkout");
@@ -630,7 +631,7 @@ it.live(
 );
 
 it.live("clone uses pushed history, keeps source checkout isolated, and resolves remote branches", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo: source } = yield* fixture();
     const bare = join(root, "origin.git");
     git(root, "init", "--bare", bare);
@@ -681,7 +682,7 @@ it("rejects credential-bearing and cross-host local origin URLs without echoing 
 });
 
 it.live("clone destination rejects bare and separate Git directories without touching their metadata", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo: source } = yield* fixture();
     const bare = join(root, "bare.git");
     git(root, "init", "--bare", bare);
@@ -697,6 +698,26 @@ it.live("clone destination rejects bare and separate Git directories without tou
   }).pipe(Effect.provide(BunServices.layer))
 );
 
+it.live("clone planning checks the nearest existing parent without creating directories", () =>
+  Effect.gen(function*() {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-clone-parent-")));
+    temporary.push(root);
+    const readonly = join(root, "readonly");
+    yield* Effect.promise(() => mkdir(readonly));
+    const destination = join(readonly, "nested", "repo");
+    try {
+      yield* Effect.promise(() => chmod(readonly, 0o500));
+      const error = yield* Effect.flip(checkCloneParent(destination));
+      expect(error.message).toContain(destination);
+      expect(error.message).toContain(readonly);
+      expect(error.cause).toBeDefined();
+      yield* Effect.promise(() => expect(access(join(readonly, "nested"))).rejects.toThrow());
+    } finally {
+      yield* Effect.promise(() => chmod(readonly, 0o700));
+    }
+  }).pipe(Effect.provide(BunServices.layer))
+);
+
 it("accepts credential-free SSH user and bracketed IPv6 locators", () => {
   expect(safeOrigin("ssh://deploy@[2001:db8::1]/team/repo.git", false)).toBe("ssh://deploy@[2001:db8::1]/team/repo.git");
   expect(safeOrigin("deploy@git.example.org:team/repo.git", false)).toBe("deploy@git.example.org:team/repo.git");
@@ -704,7 +725,7 @@ it("accepts credential-free SSH user and bracketed IPv6 locators", () => {
 });
 
 it.live("clone checkout task keeps pushed branches and rejects unpushed, colliding, and symlinked destinations", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo: source } = yield* fixture();
     const bare = join(root, "origin.git");
     git(root, "init", "--bare", bare);
@@ -741,7 +762,7 @@ it.live("clone checkout task keeps pushed branches and rejects unpushed, collidi
 );
 
 it.live("existing clone checkout pins repository identity and default origin base", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo: source } = yield* fixture();
     const bare = join(root, "origin.git");
     git(root, "init", "--bare", bare);
@@ -778,7 +799,7 @@ it.live("existing clone checkout pins repository identity and default origin bas
 );
 
 it.live("JJ clone checkout creates a named workspace at a source-resolved published base", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const { root, repo: source } = yield* fixture();
     const bare = join(root, "origin.git");
     git(root, "init", "--bare", bare);
@@ -799,9 +820,13 @@ it.live("JJ clone checkout creates a named workspace at a source-resolved publis
       const destination = join(root, "jj-target");
       const plan = {
         vcs: "jj" as const, hostId, sessionId, repo: destination, existing: false, label: "Clone & Open",
-        input: { vcs: "jj" as const, source: { vcs: "jj" as const, url: bare, sourceHostId: hostId,
-          revisions: [{ expression: revision.commitId, label: "base", revision }], revision },
-          repo: destination, sessionId, name: "Task", worktreeName: "fresh", revision: revision.commitId },
+        input: {
+          vcs: "jj" as const, source: {
+            vcs: "jj" as const, url: bare, sourceHostId: hostId,
+            revisions: [{ expression: revision.commitId, label: "base", revision }], revision
+          },
+          repo: destination, sessionId, name: "Task", worktreeName: "fresh", revision: revision.commitId
+        },
         base: revision
       };
       const prepared = yield* prepareCloneCheckout(plan);

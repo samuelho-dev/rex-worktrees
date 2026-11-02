@@ -2,6 +2,8 @@ import { Effect, FileSystem, Path, Schema } from "effect"
 import { repository, project } from "./repositories.ts"
 import { missing, notRepository } from "./git.ts"
 import { AppError, ConfigSchema, type ResolvedConfig } from "./contracts.ts"
+import { rememberedCloneRoot } from "./state.ts"
+
 
 
 export const loadConfig = Effect.gen(function*() {
@@ -29,6 +31,18 @@ export const loadConfig = Effect.gen(function*() {
   }
   return config
 })
+export const resolveCloneRoot = Effect.fnUntraced(function*(roots: readonly string[], projects: readonly { path: string }[], stateRoot?: string) {
+  const path = yield* Path.Path
+  if (roots[0]) return roots[0]
+  const remembered = yield* rememberedCloneRoot(stateRoot)
+  if (remembered) return remembered
+  const parents = new Set(projects.map(project => path.dirname(project.path)))
+  if (parents.size === 1) return [...parents][0]!
+  const home = process.env.HOME
+  if (!home || !path.isAbsolute(home)) return yield* new AppError({ message: "Target HOME must be an absolute directory" })
+  return home
+})
+
 
 export const resolveWorktreeRoot = Effect.fnUntraced(function*(repoPath: string) {
   const config = yield* loadConfig

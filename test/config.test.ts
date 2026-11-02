@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { BunServices } from "@effect/platform-bun";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig, resolveCloneRoot } from "../src/config.ts";
+import { rememberedCloneRoot, rememberCloneRoot } from "../src/state.ts";
+
 
 it.live(
   "absent and omitted config roots discover nothing; configured roots and projects are opt-in; invalid types fail",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const root = yield* Effect.promise(() =>
         mkdtemp(join(tmpdir(), "rex-config-")),
       );
@@ -71,4 +73,31 @@ it.live(
         yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
       }
     }).pipe(Effect.provide(BunServices.layer)),
+);
+it.live("clone root precedence and advisory state stay destination-local without touching config", () =>
+  Effect.gen(function*() {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-clone-state-")));
+    const state = join(root, "state");
+    const parent = join(root, "previous-clones");
+    const projects = [{ path: join(root, "projects", "one") }, { path: join(root, "projects", "two") }];
+    try {
+      expect(yield* resolveCloneRoot([], [], state)).toBe(process.env.HOME);
+      expect(yield* resolveCloneRoot([], projects, state)).toBe(join(root, "projects"));
+      expect(yield* resolveCloneRoot([], [...projects, { path: join(root, "elsewhere", "three") }], state)).toBe(process.env.HOME);
+      yield* rememberCloneRoot(parent, state);
+      expect(yield* rememberedCloneRoot(state)).toBe(parent);
+      expect(yield* resolveCloneRoot([], projects, state)).toBe(parent);
+      expect(yield* resolveCloneRoot([join(root, "configured")], projects, state)).toBe(join(root, "configured"));
+      const file = join(state, "rex-worktrees", "clone-root.json");
+      for (const value of ["{bad", JSON.stringify({ cloneRoot: "relative" }), JSON.stringify({ cloneRoot: "/tmp/../tmp" })]) {
+        yield* Effect.promise(() => writeFile(file, value));
+        expect(yield* rememberedCloneRoot(state)).toBeUndefined();
+      }
+      yield* Effect.promise(() => rm(file));
+      yield* Effect.promise(() => mkdir(file));
+      yield* Effect.flip(rememberedCloneRoot(state)); // IO errors aren't malformed advisory records.
+    } finally {
+      yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
+    }
+  }).pipe(Effect.provide(BunServices.layer))
 );

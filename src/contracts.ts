@@ -6,11 +6,11 @@ import type { Prompt } from "effect/cli"
 export class AppError extends Schema.TaggedError<AppError>()("AppError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect())
-}) {}
+}) { }
 export class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   message: Schema.String, program: Schema.String, args: Schema.Array(Schema.String),
   exitCode: Schema.Number, stdout: Schema.String, stderr: Schema.String
-}) {}
+}) { }
 export const ServerHostIdSchema = Schema.String.pipe(Schema.brand("ServerHostId"))
 export type ServerHostId = typeof ServerHostIdSchema.Type
 export const RegisteredHostIdSchema = Schema.String.pipe(Schema.brand("RegisteredHostId"))
@@ -228,7 +228,7 @@ export const RequestSchema = Schema.Union([
 export type Request = typeof RequestSchema.Type
 export type RequestBody<R = Request> = R extends Request ? Omit<R, keyof RequestIdentity> : never
 export const ResponseSchema = Schema.Union([
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), roots: Schema.optional(Schema.Array(Schema.String)), checkout: Schema.optional(RepositorySchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), roots: Schema.optional(Schema.Array(Schema.String)), cloneRoot: Schema.String, checkout: Schema.optional(RepositorySchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project-missing"), path: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), source: CloneSourceSchema }),
@@ -252,20 +252,26 @@ export const PopupBoundsSchema = Schema.Tuple([Schema.Number, Schema.Number, Sch
 export type PopupBounds = typeof PopupBoundsSchema.Type
 export const RexIdentitySchema = Schema.Struct({ host_id: ServerHostIdSchema, endpoint: Schema.String, principal: Schema.Struct({ transport: Schema.String }) })
 export const RexSessionsSchema = Schema.Struct({ sessions: Schema.Array(Schema.Struct({ session_id: SessionIdSchema, label: Schema.String })) })
-export const RexClientsSchema = Schema.Struct({ clients: Schema.Array(Schema.Struct({
-  client_id: ClientIdSchema, info: Schema.optional(Schema.Struct({ kind: Schema.String, label: Schema.optional(Schema.String) })),
-  connection_state: Schema.optional(Schema.String)
-})) })
-export const RexWindowsSchema = Schema.Struct({ windows: Schema.Array(Schema.Struct({
-  window_id: WindowIdSchema, label: Schema.String,
-  layers: Schema.Array(Schema.Struct({ blocks: Schema.optional(Schema.Array(Schema.Struct({ block_id: BlockIdSchema, host_id: ServerHostIdSchema }))) }))
-})) })
-export const RexViewSchema = Schema.Struct({ active_window_id: Schema.NullOr(WindowIdSchema), windows: Schema.Array(Schema.Struct({
-  window_id: WindowIdSchema, layers: Schema.Array(Schema.Struct({
-    layer_id: Schema.NullOr(LayerIdSchema), kind: Schema.String, bounds: Schema.optional(Schema.NullOr(PopupBoundsSchema)),
-    blocks: Schema.Array(Schema.Struct({ block_id: BlockIdSchema, owner: Schema.optional(Schema.NullOr(ClientIdSchema)) }))
+export const RexClientsSchema = Schema.Struct({
+  clients: Schema.Array(Schema.Struct({
+    client_id: ClientIdSchema, info: Schema.optional(Schema.Struct({ kind: Schema.String, label: Schema.optional(Schema.String) })),
+    connection_state: Schema.optional(Schema.String)
   }))
-})) })
+})
+export const RexWindowsSchema = Schema.Struct({
+  windows: Schema.Array(Schema.Struct({
+    window_id: WindowIdSchema, label: Schema.String,
+    layers: Schema.Array(Schema.Struct({ blocks: Schema.optional(Schema.Array(Schema.Struct({ block_id: BlockIdSchema, host_id: ServerHostIdSchema }))) }))
+  }))
+})
+export const RexViewSchema = Schema.Struct({
+  active_window_id: Schema.NullOr(WindowIdSchema), windows: Schema.Array(Schema.Struct({
+    window_id: WindowIdSchema, layers: Schema.Array(Schema.Struct({
+      layer_id: Schema.NullOr(LayerIdSchema), kind: Schema.String, bounds: Schema.optional(Schema.NullOr(PopupBoundsSchema)),
+      blocks: Schema.Array(Schema.Struct({ block_id: BlockIdSchema, owner: Schema.optional(Schema.NullOr(ClientIdSchema)) }))
+    }))
+  }))
+})
 export const RexResizedSchema = Schema.Struct({ revision: Schema.Number })
 export const RexTerminalSizeSchema = Schema.Struct({ ...PopupSizeSchema.fields, owner: Schema.NullOr(ClientIdSchema) })
 export const RexCreatedSchema = Schema.Struct({ window_id: Schema.optional(WindowIdSchema), block_ids: Schema.Array(BlockIdSchema) })

@@ -1,3 +1,5 @@
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveWorktreeRoot } from "./config.ts";
@@ -5,7 +7,7 @@ import { AppError, CommandError, BlockIdSchema, RexProcessSchema, RexDirectorySc
 import { cloneRepository as cloneGitRepository, createWorktree, gitContext, listBranches, listWorktrees as listGitWorktrees, missing, origin, originDefaultHead, planWorktree, remoteBranchHead, remoteBranches, repositoryHead, safeOrigin, validCloneBranch } from "./git.ts";
 import * as jj from "./jj.ts";
 import { repository } from "./repositories.ts";
-import { associations, saveAssociation } from "./state.ts";
+import { associations, rememberCloneRoot, saveAssociation } from "./state.ts";
 import { createSplit, createTab, focus, listClients, listSessions, localDirectoryUri, localHost, rex, windowList } from "./rex.ts";
 
 const fail = (message: string) => Effect.fail(new AppError({ message }));
@@ -119,19 +121,25 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   if (input.split && !target) detail = "No live tab for this checkout; opening a new tab instead.";
   if (input.vcs === "jj" && checkout === "create")
     detail = [detail, `Creating a JJ workspace snapshots ${repo.path}; its working-copy commit and colocated Git index intent-to-add entries may change.`].filter(Boolean).join(" ");
-  const common = { hostId: host.id, sessionId: input.sessionId, ...(clientId ? { clientId } : {}), path,
+  const common = {
+    hostId: host.id, sessionId: input.sessionId, ...(clientId ? { clientId } : {}), path,
     ...(worktreeRoot ? { worktreeRoot } : {}), action, ...(target ? { target } : {}),
     nameRole, ...(nameRole !== "none" ? { name: input.name } : {}),
-    ...(detail ? { detail } : {}), ...(warning ? { warning } : {}) };
-  if (input.vcs === "git") return { ...common, vcs: "git" as const,
+    ...(detail ? { detail } : {}), ...(warning ? { warning } : {})
+  };
+  if (input.vcs === "git") return {
+    ...common, vcs: "git" as const,
     input: { ...input, repo: repo.path, ...(input.path ? { path } : {}) }, branch, checkout,
     ...(gitBase ? { base: gitBase } : {}),
     label: action === "focus" ? "Focus existing tab" : checkout === "create" ? "Create worktree & open" :
-      checkout === "attach" ? "Attach branch & open" : action === "split" ? "Open pane" : "Open tab" };
-  return { ...common, vcs: "jj" as const, checkout: checkout === "create" ? "create" as const : "existing" as const,
+      checkout === "attach" ? "Attach branch & open" : action === "split" ? "Open pane" : "Open tab"
+  };
+  return {
+    ...common, vcs: "jj" as const, checkout: checkout === "create" ? "create" as const : "existing" as const,
     input: { ...input, repo: repo.path, ...(input.path ? { path } : {}) }, workspaceName: workspaceName!,
     ...(base ? { base } : {}), label: action === "focus" ? "Focus existing tab" :
-      checkout === "create" ? "Create workspace & open" : action === "split" ? "Open pane" : "Open tab" };
+      checkout === "create" ? "Create workspace & open" : action === "split" ? "Open pane" : "Open tab"
+  };
 });
 
 export const sameLaunchPlan = (a: LaunchPlan, b: LaunchPlan): boolean =>
@@ -148,10 +156,10 @@ export const sameLaunchPlan = (a: LaunchPlan, b: LaunchPlan): boolean =>
   a.target?.label === b.target?.label &&
   (a.vcs === "git" && b.vcs === "git" && a.input.vcs === "git" && b.input.vcs === "git"
     ? a.input.branch === b.input.branch && a.branch === b.branch &&
-      a.base?.head === b.base?.head && a.base?.branch === b.base?.branch
+    a.base?.head === b.base?.head && a.base?.branch === b.base?.branch
     : a.vcs === "jj" && b.vcs === "jj" && a.input.vcs === "jj" && b.input.vcs === "jj" &&
-      a.input.revision === b.input.revision && a.workspaceName === b.workspaceName &&
-      a.base?.commitId === b.base?.commitId && a.base?.changeId === b.base?.changeId);
+    a.input.revision === b.input.revision && a.workspaceName === b.workspaceName &&
+    a.base?.commitId === b.base?.commitId && a.base?.changeId === b.base?.changeId);
 
 export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: readonly string[], reviewed?: LaunchPlan, expectedHostId?: ServerHostId) {
   const pathService = yield* Path.Path;
@@ -162,8 +170,10 @@ export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: r
     const target = plan.target;
     if (!target) return yield* fail("The reviewed focus target is no longer available");
     const warning = [plan.warning, yield* focus(plan.sessionId, target.windowId, plan.clientId, target.blockId)].filter(Boolean).join("; ") || undefined;
-    const result: LaunchResult = { hostId: plan.hostId, sessionId: plan.sessionId, windowId: target.windowId, blockId: target.blockId, path: plan.path,
-      pending: false, action: plan.action, warning };
+    const result: LaunchResult = {
+      hostId: plan.hostId, sessionId: plan.sessionId, windowId: target.windowId, blockId: target.blockId, path: plan.path,
+      pending: false, action: plan.action, warning
+    };
     return result;
   }
   const repo = yield* repository(plan.input.repo);
@@ -179,8 +189,10 @@ export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: r
     ...(plan.input.worktreeName !== undefined ? { worktreeName: plan.input.worktreeName } : {}),
     ...(plan.base ? { base: plan.base.head } : {}),
     ...(plan.checkout !== "create" ? { checkout: plan.checkout } : {})
-  } : { ...common, vcs: "jj", checkout: plan.checkout, workspaceName: plan.workspaceName,
-    ...(plan.base ? { base: plan.base } : {}) };
+  } : {
+    ...common, vcs: "jj", checkout: plan.checkout, workspaceName: plan.workspaceName,
+    ...(plan.base ? { base: plan.base } : {})
+  };
   const argv = [...command, "task", JSON.stringify(request)];
   // The task process owns creation and persists the association before starting its shell.
   const target = plan.target;
@@ -190,8 +202,10 @@ export const launch = Effect.fnUntraced(function*(input: LaunchInput, command: r
     ? target ? yield* createSplit(plan.sessionId, target.windowId, target.blockId, name, plan.path, argv) : yield* fail("The reviewed split target is no longer available")
     : yield* createTab(plan.sessionId, name, plan.checkout === "existing" ? plan.path : repo.path, argv);
   const warning = [plan.warning, yield* focus(plan.sessionId, created.windowId, plan.clientId, created.blockId)].filter(Boolean).join("; ") || undefined;
-  const result: LaunchResult = { hostId: plan.hostId, sessionId: plan.sessionId, windowId: created.windowId, blockId: created.blockId, path: plan.path,
-    pending: true, action: plan.action, warning };
+  const result: LaunchResult = {
+    hostId: plan.hostId, sessionId: plan.sessionId, windowId: created.windowId, blockId: created.blockId, path: plan.path,
+    pending: true, action: plan.action, warning
+  };
   return result;
 });
 
@@ -228,7 +242,7 @@ export const task = Effect.fnUntraced(function*(request: TaskRequest) {
       if (!request.base) return yield* fail("New JJ workspace requires a pinned base revision");
       const planned = yield* jj.planWorkspace(request.repo, request.workspaceName, request.base.commitId, request.worktreeRoot);
       if (planned.path !== request.path || planned.workspaceName !== request.workspaceName ||
-          planned.base.commitId !== request.base.commitId || planned.base.changeId !== request.base.changeId)
+        planned.base.commitId !== request.base.commitId || planned.base.changeId !== request.base.changeId)
         return yield* fail("JJ workspace destination or pinned base changed since launch");
       const created = yield* jj.createWorkspace(request.repo, request.workspaceName, request.base, request.worktreeRoot);
       if (!created.path || !created.present) return yield* fail(`JJ workspace registration has no available checkout; inspect ${request.path}`);
@@ -303,6 +317,18 @@ export const cloneDestination = Effect.fnUntraced(function*(destination: string,
   return undefined;
 });
 
+export const checkCloneParent = Effect.fnUntraced(function*(destination: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  let ancestor = path.dirname(destination);
+  while (!(yield* fs.lstat(ancestor).pipe(Effect.map(() => true), Effect.catchIf(missing, () => Effect.succeed(false)))))
+    ancestor = path.dirname(ancestor);
+  yield* Effect.tryPromise({
+    try: () => access(ancestor, constants.W_OK | constants.X_OK),
+    catch: cause => new AppError({ message: `Cannot create clone destination ${destination}: ${ancestor} is not writable; choose another destination or fix its permissions`, cause })
+  });
+});
+
 export const planClone = Effect.fnUntraced(function*(input: CloneInput, expectedHostId?: ServerHostId) {
   const host = yield* localHost;
   if (expectedHostId && host.id !== expectedHostId) return yield* fail("Wrong Rex clone host");
@@ -313,9 +339,12 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
   if (!input.name.trim() || input.name.startsWith("-") || /[\p{ASCII}&&\p{Cc}]/v.test(input.name)) return yield* fail("Invalid Rex tab name");
   if (input.vcs === "git") yield* validCloneBranch(input.branch, input.worktreeName);
   else if (input.worktreeName !== undefined && !input.worktreeName.trim()) return yield* fail("JJ workspace name cannot be blank");
-  const url = yield* Effect.try({ try: () => safeOrigin(input.source.url, input.source.sourceHostId === host.id),
-    catch: () => new AppError({ message: "Clone source URL is unsafe or local to another Rex host" }) });
+  const url = yield* Effect.try({
+    try: () => safeOrigin(input.source.url, input.source.sourceHostId === host.id),
+    catch: () => new AppError({ message: "Clone source URL is unsafe or local to another Rex host" })
+  });
   const commonDir = yield* cloneDestination(input.repo, url, input.vcs, host.id);
+  if (commonDir === undefined) yield* checkCloneParent(input.repo);
   const existing = commonDir !== undefined;
   let gitBase: string | undefined;
   let base: JjRevision | undefined;
@@ -345,10 +374,14 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
     detail: [`Source ${url} → ${input.repo}. Only pushed history transfers; credentials stay on this machine.`, snapshotDetail].filter(Boolean).join(" "),
     ...(warning ? { warning } : {})
   };
-  if (input.vcs === "git") return { ...common, vcs: "git" as const,
-    input: { ...input, source: { ...input.source, url } }, ...(gitBase ? { base: gitBase } : {}) };
-  return { ...common, vcs: "jj" as const,
-    input: { ...input, source: { ...input.source, url } }, ...(base ? { base } : {}) };
+  if (input.vcs === "git") return {
+    ...common, vcs: "git" as const,
+    input: { ...input, source: { ...input.source, url } }, ...(gitBase ? { base: gitBase } : {})
+  };
+  return {
+    ...common, vcs: "jj" as const,
+    input: { ...input, source: { ...input.source, url } }, ...(base ? { base } : {})
+  };
 });
 
 export const sameClonePlan = (a: ClonePlan, b: ClonePlan): boolean =>
@@ -361,18 +394,18 @@ export const sameClonePlan = (a: ClonePlan, b: ClonePlan): boolean =>
   a.input.source.url === b.input.source.url && a.input.source.sourceHostId === b.input.source.sourceHostId &&
   (a.vcs === "git" && b.vcs === "git" && a.input.vcs === "git" && b.input.vcs === "git"
     ? a.base === b.base && a.input.branch === b.input.branch && a.input.branchMode === b.input.branchMode &&
-      a.input.source.branch === b.input.source.branch &&
-      a.input.source.branches.length === b.input.source.branches.length &&
-      a.input.source.branches.every((branch, index) => branch === b.input.source.branches[index])
+    a.input.source.branch === b.input.source.branch &&
+    a.input.source.branches.length === b.input.source.branches.length &&
+    a.input.source.branches.every((branch, index) => branch === b.input.source.branches[index])
     : a.vcs === "jj" && b.vcs === "jj" && a.input.vcs === "jj" && b.input.vcs === "jj" &&
-      a.base?.commitId === b.base?.commitId && a.base?.changeId === b.base?.changeId &&
-      a.input.revision === b.input.revision &&
-      a.input.source.revision?.commitId === b.input.source.revision?.commitId &&
-      a.input.source.revision?.changeId === b.input.source.revision?.changeId &&
-      a.input.source.revisions.length === b.input.source.revisions.length &&
-      a.input.source.revisions.every((choice, index) => choice.expression === b.input.source.revisions[index]?.expression &&
-        choice.revision.commitId === b.input.source.revisions[index]?.revision.commitId &&
-        choice.revision.changeId === b.input.source.revisions[index]?.revision.changeId));
+    a.base?.commitId === b.base?.commitId && a.base?.changeId === b.base?.changeId &&
+    a.input.revision === b.input.revision &&
+    a.input.source.revision?.commitId === b.input.source.revision?.commitId &&
+    a.input.source.revision?.changeId === b.input.source.revision?.changeId &&
+    a.input.source.revisions.length === b.input.source.revisions.length &&
+    a.input.source.revisions.every((choice, index) => choice.expression === b.input.source.revisions[index]?.expression &&
+      choice.revision.commitId === b.input.source.revisions[index]?.revision.commitId &&
+      choice.revision.changeId === b.input.source.revisions[index]?.revision.changeId));
 
 export const launchClone = Effect.fnUntraced(function*(input: CloneInput, command: readonly string[], reviewed?: ClonePlan, expectedHostId?: ServerHostId) {
   const path = yield* Path.Path;
@@ -395,14 +428,16 @@ export const launchClone = Effect.fnUntraced(function*(input: CloneInput, comman
 // The terminal task owns clone/create so a closed popup cannot cancel the destination operation.
 export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan) {
   if (plan.vcs === "git") yield* validCloneBranch(plan.input.branch, plan.input.worktreeName);
-  const url = yield* Effect.try({ try: () => safeOrigin(plan.input.source.url, plan.input.source.sourceHostId === plan.hostId),
-    catch: () => new AppError({ message: "Clone source URL is unsafe or local to another Rex host" }) });
+  const url = yield* Effect.try({
+    try: () => safeOrigin(plan.input.source.url, plan.input.source.sourceHostId === plan.hostId),
+    catch: () => new AppError({ message: "Clone source URL is unsafe or local to another Rex host" })
+  });
   if (url !== plan.input.source.url || plan.input.vcs !== plan.vcs) return yield* fail("Clone source changed since review");
   const observed = yield* cloneDestination(plan.repo, url, plan.vcs, plan.hostId);
   if (observed !== plan.commonDir || (observed !== undefined) !== plan.existing)
     return yield* fail("Clone destination identity changed since review");
   if (plan.vcs === "git" && plan.existing && plan.input.branchMode === "create" &&
-      (!plan.base || plan.base !== (yield* originDefaultHead(plan.repo))))
+    (!plan.base || plan.base !== (yield* originDefaultHead(plan.repo))))
     return yield* fail("Origin default branch changed since review");
   if (plan.vcs === "jj" && plan.existing && plan.base) {
     const reached = yield* jj.resolveRevision(plan.repo, plan.base.commitId);
@@ -483,6 +518,8 @@ export const cloneTask = Effect.fnUntraced(function*(request: CloneTaskRequest) 
   const blockId = yield* Schema.decodeUnknownEffect(BlockIdSchema)(process.env.REX_BLOCK);
   if (!sameClonePlan(plan, yield* planClone(plan.input, plan.hostId))) return yield* fail("Clone target changed since launch; destination left untouched");
   const { repo, cwd } = yield* prepareCloneCheckout(plan);
+  yield* rememberCloneRoot((yield* Path.Path).dirname(repo.path)).pipe(Effect.catch(error =>
+    Effect.sync(() => console.error(`Checkout ${cwd} is available; clone parent not remembered: ${Cause.pretty(Cause.fail(error))}`))));
   const windows = yield* windowList(plan.sessionId).pipe(Effect.catch(() => Effect.succeed([])));
   const window = windows.find(entry => entry.layers.some(layer => layer.blocks?.some(block => block.block_id === blockId && block.host_id === plan.hostId)));
   if (window) yield* saveAssociation({ vcs: repo.vcs, hostId: plan.hostId, commonDir: repo.commonDir, path: cwd, sessionId: plan.sessionId, windowId: window.window_id, blockId })

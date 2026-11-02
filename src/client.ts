@@ -45,7 +45,7 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
     response = yield* Schema.decodeUnknownEffect(RexWorktreesResponseSchema)(raw);
   }
   if (response.hostId !== host.hostId || response.version !== 3 ||
-      response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
+    response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
     return yield* fail(`Unexpected Rex host/protocol response from ${host.label}; update rex-worktrees on that machine, run setup, and reload its Rex config`);
   return response;
 });
@@ -53,7 +53,7 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
 export const discover = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], context?: string) {
   const result = yield* request(host, command, { kind: "discover", ...(host.local && context ? { context } : {}) });
   if (result.kind !== "discover") return yield* fail("Unexpected discovery response");
-  return { sessions: result.sessions, clients: result.clients, projects: result.projects, roots: result.roots ?? [], ...(result.checkout ? { checkout: result.checkout } : {}) };
+  return { sessions: result.sessions, clients: result.clients, projects: result.projects, roots: result.roots ?? [], cloneRoot: result.cloneRoot, ...(result.checkout ? { checkout: result.checkout } : {}) };
 });
 export const inspectProject = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], path: string) {
   const result = yield* request(host, command, { kind: "project", path });

@@ -2,6 +2,43 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { AssociationSchema, type Association } from "./contracts.ts";
+const cloneRootFile = Effect.fnUntraced(function*(stateRoot?: string) {
+  const path = yield* Path.Path;
+  const root = stateRoot ?? process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state");
+  if (!path.isAbsolute(root)) return yield* Effect.fail(new Error("State home must be absolute"));
+  return path.join(root, "rex-worktrees", "clone-root.json");
+});
+
+const CloneRootSchema = Schema.Struct({ cloneRoot: Schema.String });
+
+export const rememberedCloneRoot = Effect.fnUntraced(function*(stateRoot?: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const filename = yield* cloneRootFile(stateRoot);
+  const raw = yield* fs.readFileString(filename).pipe(Effect.catchIf(
+    error => PlatformError.isPlatformError(error) && error.reason._tag === "NotFound",
+    () => Effect.succeed(undefined)
+  ));
+  if (raw === undefined) return undefined;
+  // ponytail: advisory state can be damaged, but inaccessible state is a real IO error.
+  const record = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CloneRootSchema))(raw).pipe(
+    Effect.catch(() => Effect.succeed(undefined))
+  );
+  return record && path.isAbsolute(record.cloneRoot) && path.resolve(record.cloneRoot) === record.cloneRoot
+    ? record.cloneRoot : undefined;
+});
+
+export const rememberCloneRoot = Effect.fnUntraced(function*(parent: string, stateRoot?: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!path.isAbsolute(parent) || path.resolve(parent) !== parent) return yield* Effect.fail(new Error("Clone parent must be normalized and absolute"));
+  const filename = yield* cloneRootFile(stateRoot);
+  yield* fs.makeDirectory(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  yield* fs.writeFileString(temporary, JSON.stringify({ cloneRoot: parent }), { flag: "wx", mode: 0o600 });
+  yield* fs.rename(temporary, filename).pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)));
+});
+
 
 // One atomic file per terminal prevents overlapping task processes from losing associations.
 export const saveAssociation = Effect.fnUntraced(function*(association: Association) {
