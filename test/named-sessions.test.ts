@@ -14,13 +14,12 @@ it.live("reviews never create sessions; launch and clone use only the new native
     const bin = join(root, "bin");
     const log = join(root, "rex-log.jsonl");
     const previous = Object.fromEntries(["REX_BIN_DIR", "REX_WORKTREES_LOCAL_ENDPOINT", "REX_TEST_LOG", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "HOME", "REX_SESSION", "REX_BLOCK", "SHELL"].map(key => [key, process.env[key]]));
-    const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-    gitEnv.HOME = root;
-    gitEnv.XDG_CONFIG_HOME = join(root, "config");
     try {
-      yield* Effect.promise(() => mkdir(repo));
+      process.env.HOME = root;
+      process.env.XDG_CONFIG_HOME = join(root, "config");
+      const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
       yield* Effect.promise(() => mkdir(bin));
-      const init = Bun.spawnSync(["git", "-C", repo, "init", "-b", "main"], { env: gitEnv, stdout: "pipe", stderr: "pipe" });
+      const init = Bun.spawnSync(["git", "init", "-b", "main", repo], { env: gitEnv, stdout: "pipe", stderr: "pipe" });
       if (init.exitCode !== 0) throw new Error(new TextDecoder().decode(init.stderr));
       yield* Effect.promise(() => writeFile(join(repo, "tracked"), "base\n"));
       for (const args of [["add", "tracked"], ["-c", "user.name=Rex Tests", "-c", "user.email=rex@example.test", "commit", "-m", "base"]]) {
@@ -55,8 +54,6 @@ console.log(JSON.stringify(result));
       process.env.REX_WORKTREES_LOCAL_ENDPOINT = "unix:///fixture.sock";
       process.env.REX_TEST_LOG = log;
       process.env.XDG_STATE_HOME = join(root, "state");
-      process.env.HOME = root;
-      process.env.XDG_CONFIG_HOME = join(root, "config");
       const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
       const input: LaunchInput = { vcs: "git", repo, path: repo, name: "Task", session: { kind: "new", name: "Same label" } };
       const reviewed = yield* planLaunch(input, hostId);
