@@ -10,7 +10,6 @@ import {
 } from "../src/contracts.ts";
 import {
   changeDestination,
-  changeMachine,
   changeProject,
   changeProjectChoice,
   cloneInputFor,
@@ -27,13 +26,6 @@ const local = Schema.decodeUnknownSync(DestinationHostSchema)({
   label: "This Mac",
   local: true,
   hostId: "host-local",
-});
-const remote = Schema.decodeUnknownSync(DestinationHostSchema)({
-  key: "host:remote",
-  selector: "Homelab",
-  label: "Homelab",
-  local: false,
-  hostId: "host-remote",
 });
 const first = {
   vcs: "git" as const,
@@ -65,29 +57,6 @@ const ready = (): Draft => ({
   mode: "split",
 });
 
-it("logical project survives machine failure but old physical target cannot launch", () => {
-  const draft = selectWorktree(ready(), {
-    vcs: "git",
-    path: first.path,
-    branch: "main",
-    head: "abc",
-    bare: false,
-    locked: false,
-    prunable: false,
-  });
-  const changed = changeMachine(draft, remote);
-  expect(changed).toEqual({ machine: remote, projectChoice, mode: "split" });
-  expect(inputFor(changed)).toBeUndefined();
-  expect(
-    inputFor({
-      ...changed,
-      project: other,
-      destination: { branch: "feature", label: "feature" },
-      session: { kind: "existing", id: sessionId },
-    }),
-  ).toBeUndefined();
-  expect(changeMachine(draft, local)).toEqual(draft);
-});
 
 it("project choice invalidates checkout and branch, but same-host binding retains session", () => {
   const draft = changeDestination(
@@ -111,7 +80,6 @@ it("typed session name remains new intent even when an existing session has the 
     destination: { branch: "feature", label: "feature" }
   };
   expect(inputFor(draft)?.session).toEqual({ kind: "new", name: "Same label" });
-  expect(changeMachine(draft, remote).session).toBeUndefined();
 });
 
 it("directory name and Git branch remain independent, while occupied branch uses actual checkout", () => {
@@ -166,8 +134,6 @@ it("clone draft uses logical source and exact target, without fabricating a targ
   const newBranch = cloneInputFor({ ...clone, destination: { branch: "new-feature", label: "new-feature" } });
   if (newBranch?.vcs !== "git") throw new Error("Expected Git clone input");
   expect(newBranch.branchMode).toBe("create");
-  expect(changeMachine(clone, remote).clone).toBeUndefined();
-  expect(changeMachine(clone, remote).session).toBeUndefined();
   expect(changeProjectChoice(clone, { name: "beta" }).clone).toBeUndefined();
   expect(changeProject(clone, other).clone).toBeUndefined();
 });
@@ -198,9 +164,6 @@ it("JJ existing workspace opens by exact path without a writable base", () => {
   expect(opened.projectChoice?.source?.repository).toEqual(jj);
   expect(opened.projectChoice?.source?.checkoutPath).toBe(tree.path);
   expect(opened.sourcePath).toBe(tree.path);
-  expect(changeMachine(opened, remote).projectChoice?.source).toEqual({
-    machineKey: local.key, hostId: local.hostId, repository: jj, checkoutPath: tree.path
-  });
   expect(inputFor(opened)).not.toHaveProperty("revision");
   expect(inputFor(opened)).not.toHaveProperty("worktreeName");
   expect(typeWorktreeName(opened, "new-workspace").destination).toBeUndefined();
@@ -237,10 +200,8 @@ it("JJ new workspace pins configured mainline unless the user selected another r
   expect(inputFor(typeWorktreeName(pinned, "different", mainline))).toMatchObject({
     vcs: "jj", worktreeName: "different", revision: revision.commitId
   });
-  expect(changeMachine(defaulted, remote)).toEqual({ machine: remote, projectChoice: defaulted.projectChoice, mode: "split" });
   expect(changeProject(defaulted, first).destination).toBeUndefined();
   expect(changeProjectChoice(defaulted, { name: "beta" }).destination).toBeUndefined();
-  expect(inputFor(changeMachine(defaulted, remote))).toBeUndefined();
   expect(inputFor(changeProjectChoice(defaulted, { name: "beta" }))).toBeUndefined();
 });
 
@@ -250,7 +211,6 @@ it("source workspace identity stays local to its host and logical project", () =
   expect(inputFor(pinned)?.repo).toBe(source.sourcePath);
   expect(changeProject(pinned, { ...jj, path: "/projects/alpha.worktrees/other" }).sourcePath).toBe(source.sourcePath);
   expect(changeProject(pinned, first).sourcePath).toBeUndefined();
-  expect(changeMachine(pinned, remote).sourcePath).toBeUndefined();
   expect(changeProjectChoice(pinned, { name: "beta" }).sourcePath).toBeUndefined();
 });
 
@@ -271,6 +231,5 @@ it("JJ clone uses source-resolved full commit ID or the cloned default, not sour
   const pinnedInput = cloneInputFor(pinned);
   if (pinnedInput?.vcs !== "jj") throw new Error("Expected JJ clone input");
   expect(pinnedInput.revision).not.toBe(base.expression);
-  expect(changeMachine(pinned, remote).clone).toBeUndefined();
   expect(changeProjectChoice(pinned, { name: "beta" }).destination).toBeUndefined();
 });

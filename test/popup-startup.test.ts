@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "changed" | "jj" | "detached" | "long",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "switch-pending" | "changed" | "jj" | "detached" | "long",
   run: (pty: {
     output: () => string;
     waitForText: (text: string | RegExp, from?: number) => Promise<void>;
@@ -83,15 +83,22 @@ async function withPopup(
         { expression: "candidate", label: "candidate", revision: { commitId: "b".repeat(40), changeId: "m".repeat(32), description: "alternate" } }
       ] : [];
       let reviewCount = 0;
+      const connect = machine => scenario === "connect" && machine.key === "remote"
+        ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
+        : Effect.succeed(machine);
+      const discover = machine => Effect.succeed({ projects: machine.local ? [project] : [], checkout: machine.local ? project : undefined,
+        sessions: scenario === "session" ? [{ id: "session-first", label: "Same label" }, { id: "session-second", label: "Same label" }]
+          : [{ id: "session-local", label: "Session" }], clients: [],
+        roots: ["/clones"], cloneRoot: "/clones" });
       mock.module(${JSON.stringify(client)}, () => ({
         listMachines: Effect.succeed(scenario === "edit" || scenario === "unsafe" ? [host] : [host, remote]),
-        connectMachine: machine => scenario === "connect" && machine.key === "remote"
-          ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
-          : Effect.succeed(machine),
-        discover: machine => Effect.succeed({ projects: machine.local ? [project] : [], checkout: machine.local ? project : undefined,
-          sessions: scenario === "session" ? [{ id: "session-first", label: "Same label" }, { id: "session-second", label: "Same label" }]
-            : [{ id: "session-local", label: "Session" }], clients: [],
-          roots: ["/clones"], cloneRoot: "/clones" }),
+        connectMachine: connect,
+        discover,
+        connectAndDiscover: machine => Effect.gen(function*() {
+          if (scenario === "switch-pending" && !machine.local) yield* Effect.never;
+          const connected = yield* connect(machine);
+          return { host: connected, ...(yield* discover(connected)) };
+        }),
         inspectProject: (_, __, path) => path === project.path
           ? Effect.succeed({ project, checkout: project, worktrees: [checkout], branches: ["main", "feature/free"], revisions })
           : Effect.fail(new AppError({ message: "Not a repository: " + path })),
@@ -535,14 +542,37 @@ it("existing checkout with backslash basename can open clone chooser and accept 
   });
 }, 8000);
 
+it("switch paints the selected machine with no actionable old destination while remote discovery waits", async () => {
+  await withPopup("switch-pending", async (pty) => {
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
+    pty.write("\t\r");
+    await pty.waitForEditor("Execution machine");
+    const before = pty.output().length;
+    pty.write("\x1b[B\r");
+    const pending = await pty.waitForForm(/MACHINE\s+Remote machine/, before);
+    expect(pending).toContain("Connecting to Remote machine");
+    expect(pending).not.toMatch(/CHECKOUT\s+alpha/);
+    expect(pending).not.toMatch(/SESSION\s+Session/);
+    expect(pending).not.toContain("Host ID: host-local");
+    expect(pty.output()).not.toContain("REVIEW_CALLED");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    expect(pty.exitCode()).toBeNull();
+  });
+}, 8000);
+
 it("machine field acceptance preserves the new connection error", async () => {
   await withPopup("connect", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
     await pty.waitForText("Esc close");
     pty.write("\t\r");
     await pty.waitForText("Execution machine");
+    const before = pty.output().length;
     pty.write("\x1b[B\r");
-    await pty.waitForText("Remote helper unavailable; install and reload Rex");
+    const recovered = await pty.waitForForm("Remote helper unavailable; install and reload Rex", before);
+    expect(recovered).toMatch(/MACHINE\s+Remote machine/);
+    expect(recovered).not.toMatch(/CHECKOUT\s+alpha/);
+    expect(recovered).not.toMatch(/SESSION\s+Session/);
+    expect(recovered).not.toContain("Host ID: host-local");
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x1b");
     expect(await pty.exited).toBe(0);

@@ -1,6 +1,6 @@
 import { Cause, Effect, Option, Queue, Result, Scope, Terminal } from "effect"
 import { Prompt } from "effect/cli"
-import { connectMachine, discover, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
+import { connectAndDiscover, connectMachine, discover, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
 import { AppError, type ClientTarget, type CloneInput, type ClonePlan, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type LaunchPlan, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type PromptAction, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
 import { makePopupSizer } from "./rex.ts"
 import { sameClonePlan, sameLaunchPlan } from "./worktrees.ts"
@@ -185,10 +185,6 @@ export const inputFor = (draft: Draft): LaunchInput | undefined => {
     : { ...common, vcs: "git", path: draft.destination.path }
 }
 
-// A logical choice survives a machine failure; no path/session/checkout from the previous host does.
-export const changeMachine = (draft: Draft, machine: Machine): Draft => draft.machine?.key === machine.key
-  ? { ...draft, machine }
-  : { machine, projectChoice: draft.projectChoice, mode: draft.mode }
 export const changeProjectChoice = (draft: Draft, projectChoice: ProjectChoice): Draft => ({
   ...draft, projectChoice, project: undefined, clone: undefined, destination: undefined,
   worktreeName: undefined, sourcePath: undefined
@@ -438,47 +434,46 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           return yield* Effect.fail(new AppError({ message: "Project directory changed; select the exact project directory again" }))
         return inspected.success
       })
-      const activate = Effect.fnUntraced(function*(machine: Machine) {
+      const activate = Effect.fnUntraced(function*(machine: Machine, showLoading = false) {
+        const previous = draft
         const previousHostId = draft.host?.hostId
-        draft = changeMachine(draft, machine)
+        draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }
+        sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
+        error = undefined
         const discoveredContext = machine.local ? contextPath : undefined
         contextPath = undefined
-        const connected = yield* Effect.result(connectMachine(machine))
+        if (showLoading) {
+          const pending = { ...formView(true), notice: `Connecting to ${machine.label}…` }
+          activeView = pending
+          yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(pending, "machine", false, yield* terminal.columns, yield* terminal.rows)}`)
+        }
+        const connected = yield* Effect.result(connectAndDiscover(machine, command, discoveredContext))
         if (Result.isFailure(connected)) {
-          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
           error = problem(connected.failure)
           return
         }
-        if (previousHostId && previousHostId !== connected.success.hostId) {
-          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }
-          sessions = []; plan = undefined; clonePlan = undefined
-        }
-        draft = { ...draft, host: connected.success }
-        const discovered = yield* Effect.result(discover(connected.success, command, discoveredContext))
-        if (Result.isFailure(discovered)) {
-          draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }; sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
-          error = problem(discovered.failure)
-          return
-        }
-        const found = discovered.success
+        const { host, ...found } = connected.success
+        if (previous.machine?.key === machine.key && previousHostId === host.hostId)
+          draft = { ...previous, machine, host }
+        else draft = { ...draft, host }
         cloneRoot = found.cloneRoot
         cloneRoots = found.roots
-        projects = [...projects.filter(item => item.source?.machineKey !== machine.key || item.source.hostId !== connected.success.hostId),
-        ...found.projects.map(repo => known(connected.success, repo, found.checkout))]
+        projects = [...projects.filter(item => item.source?.machineKey !== machine.key || item.source.hostId !== host.hostId),
+        ...found.projects.map(repo => known(host, repo, found.checkout))]
         sessions = found.sessions
         draft = {
           ...draft, session: draft.session?.kind === "new" ? draft.session
             : sessions.some(item => item.id === (draft.session?.kind === "existing" ? draft.session.id : undefined)) ? draft.session
-              : connected.success.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? { kind: "existing", id: origin.sessionId }
+              : host.local && origin.sessionId && sessions.some(item => item.id === origin.sessionId) ? { kind: "existing", id: origin.sessionId }
                 : sessions.length === 1 ? { kind: "existing", id: sessions[0]!.id } : undefined,
           clientId: focusClient(found.clients)
         }
         if (!draft.projectChoice && found.checkout && discoveredContext) {
-          const inspected = yield* Effect.result(inspectProject(connected.success, command, found.checkout.path))
+          const inspected = yield* Effect.result(inspectProject(host, command, found.checkout.path))
           if (Result.isFailure(inspected)) { error = problem(inspected.failure); return }
           if (Result.isSuccess(inspected)) {
             draft = changeProjectChoice(draft,
-              known(connected.success, inspected.success.project, inspected.success.checkout))
+              known(host, inspected.success.project, inspected.success.checkout))
             draft = changeProject(draft, inspected.success.project)
             if (inspected.success.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.success.checkout.path }
             const tree = inspected.success.worktrees.find(item => item.path === found.checkout?.path &&
@@ -486,7 +481,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             if (tree) draft = selectWorktree(draft, tree)
           }
         } else if (draft.projectChoice) {
-          const inspected = yield* Effect.result(bindProject(draft.projectChoice, connected.success, found.projects))
+          const inspected = yield* Effect.result(bindProject(draft.projectChoice, host, found.projects))
           if (Result.isFailure(inspected)) {
             if (!Terminal.isQuitError(inspected.failure)) error = problem(inspected.failure)
             return
@@ -651,7 +646,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             const machine = yield* choose("Execution machine", machines.map(item =>
               selected(item, item.key === draft.machine?.key, item.label,
                 item.local ? "This machine" : `Rex host · ${item.selector}`)))
-            yield* activate(machine)
+            yield* activate(machine, true)
           } else if (action === "project") {
             const choices = projects.map(item => ({
               value: item, title: item.name,
