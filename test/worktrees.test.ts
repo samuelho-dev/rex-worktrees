@@ -698,7 +698,28 @@ it.live("clone destination rejects bare and separate Git directories without tou
   }).pipe(Effect.provide(BunServices.layer))
 );
 
-it.live("clone planning checks the nearest existing parent without creating directories", () =>
+it("empty XDG_STATE_HOME uses the default state directory without changing the test process", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rex-clone-state-"));
+  temporary.push(home);
+  const script = `
+    import { Effect } from ${JSON.stringify(import.meta.resolve("effect"))};
+    import { BunServices } from ${JSON.stringify(import.meta.resolve("@effect/platform-bun"))};
+    import { rememberCloneRoot, rememberedCloneRoot } from ${JSON.stringify(new URL("../src/state.ts", import.meta.url).href)};
+    const parent = process.env.HOME + "/parent";
+    await Effect.runPromise(rememberCloneRoot(parent).pipe(Effect.provide(BunServices.layer)));
+    if (await Effect.runPromise(rememberedCloneRoot().pipe(Effect.provide(BunServices.layer))) !== parent) throw new Error("Remembered root mismatch");
+  `;
+  const child = Bun.spawnSync([process.execPath, "-e", script], {
+    env: { ...process.env, HOME: home, XDG_STATE_HOME: "" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);
+  expect(await readFile(join(home, ".local", "state", "rex-worktrees", "clone-root.json"), "utf8"))
+    .toBe(JSON.stringify({ cloneRoot: join(home, "parent") }));
+});
+
+it.live.skipIf(process.getuid?.() === 0)("clone planning checks the nearest existing parent without creating directories", () =>
   Effect.gen(function*() {
     const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-clone-parent-")));
     temporary.push(root);

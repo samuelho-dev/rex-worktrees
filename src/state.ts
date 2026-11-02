@@ -4,7 +4,7 @@ import { Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { AppError, AssociationSchema, type Association } from "./contracts.ts";
 const cloneRootFile = Effect.fnUntraced(function*(stateRoot?: string) {
   const path = yield* Path.Path;
-  const root = stateRoot ?? process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state");
+  const root = stateRoot ?? (process.env.XDG_STATE_HOME || path.join(homedir(), ".local", "state"));
   if (!path.isAbsolute(root)) return yield* new AppError({ message: "State home must be absolute" });
   return path.join(root, "rex-worktrees", "clone-root.json");
 });
