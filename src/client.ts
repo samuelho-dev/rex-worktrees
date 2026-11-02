@@ -71,11 +71,6 @@ export const inspectRevision = Effect.fnUntraced(function*(host: DestinationHost
   if (result.kind !== "revision") return yield* fail("Unexpected revision response");
   return result.revision;
 });
-export const inspectBranch = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], repo: string, branch: string, worktreeName?: string) {
-  const result = yield* request(host, command, { kind: "branch", repo, branch, ...(worktreeName !== undefined ? { worktreeName } : {}) });
-  if (result.kind !== "branch") return yield* fail("Unexpected branch response");
-  return { path: result.path, branch: result.branch, existing: result.existing };
-});
 export const review = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], input: LaunchInput) {
   const result = yield* request(host, command, { kind: "plan", input });
   if (result.kind !== "plan") return yield* fail("Unexpected review response");

@@ -72,10 +72,8 @@ it("every request and reply requires protocol version and destination identity",
   const request = {
     version: 3,
     hostId: "real-host-id",
-    kind: "branch",
-    repo: "/repo",
-    branch: "feature",
-    worktreeName: "task-name",
+    kind: "project",
+    path: "/repo",
   };
   expect(Schema.decodeUnknownSync(RequestSchema)(request)).toMatchObject(
     request,
@@ -92,10 +90,8 @@ it("every request and reply requires protocol version and destination identity",
   const response = {
     version: 3,
     hostId: "real-host-id",
-    kind: "branch",
-    path: "/repo.worktrees/task-name",
-    branch: "feature",
-    existing: false,
+    kind: "project-missing",
+    path: "/repo",
   };
   expect(Schema.decodeUnknownSync(ResponseSchema)(response)).toMatchObject(
     response,

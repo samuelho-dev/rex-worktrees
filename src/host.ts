@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { loadConfig, resolveCloneRoot, resolveWorktreeRoot } from "./config.ts";
-import { cloneSource as gitCloneSource, listBranches, listWorktrees as listGitWorktrees, missing, notRepository, planWorktree } from "./git.ts";
+import { loadConfig, resolveCloneRoot } from "./config.ts";
+import { cloneSource as gitCloneSource, listBranches, listWorktrees as listGitWorktrees, missing, notRepository } from "./git.ts";
 import { repository, project, discoverProjects } from "./repositories.ts";
 import * as jj from "./jj.ts";
 import { AppError, RequestSchema, type Request, type RequestIdentity, type Response } from "./contracts.ts";
@@ -78,13 +78,6 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
       const repo = yield* repository(request.repo);
       if (repo.vcs !== "jj") return yield* Effect.fail(new AppError({ message: "Base revision requires a JJ repository" }));
       result = { ...identity, kind: "revision", revision: yield* jj.resolveRevision(repo.path, request.revision) };
-      break;
-    }
-    case "branch": {
-      const repo = yield* repository(request.repo);
-      if (repo.vcs !== "git") return yield* Effect.fail(new AppError({ message: "Branch checkout requires a Git repository" }));
-      const planned = yield* planWorktree(repo.path, request.branch, yield* resolveWorktreeRoot(repo.path), request.worktreeName);
-      result = { ...identity, kind: "branch", path: planned.path, branch: planned.branch, existing: planned.existing };
       break;
     }
     case "plan": result = { ...identity, kind: "plan", plan: yield* planLaunch(request.input, host.id) }; break;
