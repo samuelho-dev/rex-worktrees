@@ -525,7 +525,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           {
             id: "session", label: "Session", value: draft.session?.kind === "new" ? `New: ${draft.session.name}`
               : sessions.find(s => s.id === (draft.session?.kind === "existing" ? draft.session.id : undefined))?.label ?? (draft.session?.kind === "existing" ? draft.session.id : "Choose or type new session"),
-            detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on submit" : undefined, disabled: !draft.host
+            detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on confirmation" : undefined, disabled: !draft.host
           },
           {
             id: "mode", label: "Mode", value: draft.clone ? "New tab (clone task)" : draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
