@@ -19,7 +19,7 @@ import { installSetup } from "../src/setup.ts";
 it.live(
   "installs independent executable beside local Rex Lua, preserves linked config and reruns once",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const root = yield* Effect.promise(() =>
         mkdtemp(join(tmpdir(), "rex-setup-")),
       );
@@ -32,7 +32,7 @@ it.live(
         const original =
           "-- custom Rex settings\nrex.action{ name = 'custom' }\n";
         const lua =
-          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\n-- custom Lua payload\nreturn {}\n";
+          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\n-- custom Lua payload\nreturn {}\n";
         const rexBinDir = join(root, "Rex Server.app", "Contents", "MacOS");
         yield* Effect.promise(() => mkdir(configDir, { recursive: true }));
         yield* Effect.promise(() => writeFile(source, "compiled-binary-v1"));
@@ -64,10 +64,9 @@ it.live(
         expect(
           yield* Effect.promise(() => readFile(paths.luaPath, "utf8")),
         ).toBe(
-          lua.replace(
-            "local installed_rex_bin_dir = false",
-            `local installed_rex_bin_dir = ${JSON.stringify(rexBinDir)}`,
-          ),
+          lua.replace("local installed_rex_bin_dir = false", `local installed_rex_bin_dir = ${JSON.stringify(rexBinDir)}`)
+            .replace("local installed_bin = false", `local installed_bin = ${JSON.stringify(paths.bin)}`)
+            .replace("local installed_config_dir = false", `local installed_config_dir = ${JSON.stringify(configDir)}`),
         );
         expect(yield* Effect.promise(() => readlink(configPath))).toBe(
           initTarget,
@@ -108,7 +107,7 @@ it.live(
 );
 
 it.live("creates an absent Rex init next to the installed Lua module", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const root = yield* Effect.promise(() =>
       mkdtemp(join(tmpdir(), "rex-setup-empty-")),
     );
@@ -121,7 +120,7 @@ it.live("creates an absent Rex init next to the installed Lua module", () =>
         source,
         home,
         configPath,
-        lua: "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n",
+        lua: "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\nreturn {}\n",
         rexBinDir: join(root, "rex-cli"),
       });
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(
@@ -139,7 +138,7 @@ it.live("creates an absent Rex init next to the installed Lua module", () =>
 it.live(
   "refuses malformed registration and destination symlinks before changing files",
   () =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const root = yield* Effect.promise(() =>
         mkdtemp(join(tmpdir(), "rex-setup-conflict-")),
       );
@@ -148,7 +147,7 @@ it.live(
         const home = join(root, "home");
         const configPath = join(root, "init.lua");
         const lua =
-          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n";
+          "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\nreturn {}\n";
         yield* Effect.promise(() => writeFile(source, "source"));
         yield* Effect.promise(() =>
           writeFile(
@@ -166,7 +165,7 @@ it.live(
               rexBinDir: join(root, "rex-cli"),
             }),
           )).message,
-        ).toContain("exactly one Rex CLI directory placeholder");
+        ).toContain("four install placeholders");
         expect(
           (yield* Effect.flip(
             installSetup({
@@ -177,7 +176,7 @@ it.live(
               rexBinDir: join(root, "rex-cli"),
             }),
           )).message,
-        ).toContain("exactly one Rex CLI directory placeholder");
+        ).toContain("four install placeholders");
         for (const malformed of [
           lua.replace("local installed_path_env = false\n", ""),
           lua + "local installed_path_env = false\n",
@@ -186,7 +185,7 @@ it.live(
             (yield* Effect.flip(installSetup({
               source, home, configPath, lua: malformed, rexBinDir: join(root, "rex-cli"),
             }))).message,
-          ).toContain("exactly one host PATH placeholder");
+          ).toContain("four install placeholders");
         }
         expect(
           yield* Effect.promise(() => readFile(configPath, "utf8")),
@@ -230,7 +229,7 @@ it.live(
 );
 
 it.live("registers a stable package bin without copying or changing either version", () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-setup-managed-")));
     try {
       const home = join(root, "home");
@@ -240,7 +239,7 @@ it.live("registers a stable package bin without copying or changing either versi
       const managedBin = join(root, "opt", "rex-worktrees");
       const original = '-- other Rex settings\nrex.action{ name = "custom" }\n';
       const manual = '-- BEGIN rex-worktrees\nrequire("rex-worktrees").setup()\n-- END rex-worktrees\n';
-      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nreturn {}\n";
+      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\nreturn {}\n";
       const rexBinDir = join(root, "rex-cli");
       yield* Effect.promise(() => mkdir(join(root, "Cellar", "0.1.0"), { recursive: true }));
       yield* Effect.promise(() => mkdir(join(root, "Cellar", "0.1.1"), { recursive: true }));
@@ -260,7 +259,7 @@ it.live("registers a stable package bin without copying or changing either versi
       expect((yield* Effect.promise(() => lstat(v1))).mode & 0o777).toBe(mode);
       expect(yield* Effect.promise(() => readlink(managedBin))).toBe(v1);
       expect(yield* Effect.promise(() => lstat(join(home, ".local", "bin")).then(() => true, () => false))).toBe(false);
-      const registered = `${original}-- BEGIN rex-worktrees\nrequire("rex-worktrees").setup({ bin = ${JSON.stringify(managedBin)} })\n-- END rex-worktrees\n-- trailing settings\n`;
+      const registered = `${original}${manual}-- trailing settings\n`;
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(registered);
       yield* installSetup({ source: v1, home, configPath, lua, rexBinDir, managedBin });
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(registered);
@@ -272,6 +271,65 @@ it.live("registers a stable package bin without copying or changing either versi
       expect((yield* Effect.promise(() => lstat(v2))).mode & 0o777).toBe(0o711);
       expect((yield* Effect.flip(installSetup({ source: v1, home, configPath, lua, rexBinDir, managedBin }))).message).toContain("must resolve to the running executable");
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(registered);
+    } finally {
+      yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
+    }
+  }).pipe(Effect.provide(BunServices.layer)),
+);
+
+it.live("migrates legacy JSON relative to its old directory and keeps its original backup", () =>
+  Effect.gen(function*() {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-setup-migrate-")));
+    try {
+      const home = join(root, "home");
+      const configPath = join(root, "rex", "init.lua");
+      const legacyConfigPath = join(root, "old-settings", "config.json");
+      const source = join(root, "bin");
+      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\nreturn {}\n";
+      const old = JSON.stringify({ roots: ["../projects", "~/src"], projects: [{ path: "./repo", worktreeRoot: "../checkouts" }], worktreeRoot: "relative" });
+      yield* Effect.promise(() => mkdir(join(root, "rex"), { recursive: true }));
+      yield* Effect.promise(() => mkdir(join(root, "old-settings"), { recursive: true }));
+      yield* Effect.promise(() => writeFile(source, "binary"));
+      yield* Effect.promise(() => writeFile(configPath, "-- other settings\n-- BEGIN rex-worktrees\nrequire(\"rex-worktrees\").setup()\n-- END rex-worktrees\n"));
+      yield* Effect.promise(() => writeFile(legacyConfigPath, old));
+      const options = { source, home, configPath, legacyConfigPath, lua, rexBinDir: join(root, "rex-cli") };
+      expect((yield* installSetup(options)).migrated).toBe(true);
+      const init = yield* Effect.promise(() => readFile(configPath, "utf8"));
+      expect(init).toContain(`roots = { "${join(root, "projects")}", "${join(home, "src")}" }`);
+      expect(init).toContain(`{ path = "${join(root, "old-settings", "repo")}", worktreeRoot = "${join(root, "checkouts")}" }`);
+      expect(init).toContain(`worktreeRoot = "${join(root, "old-settings", "relative")}"`);
+      expect(yield* Effect.promise(() => readFile(`${legacyConfigPath}.backup`, "utf8"))).toBe(old);
+      expect(yield* Effect.promise(() => lstat(legacyConfigPath).then(() => true, () => false))).toBe(false);
+      expect((yield* installSetup(options)).migrated).toBe(false);
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(init);
+    } finally {
+      yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
+    }
+  }).pipe(Effect.provide(BunServices.layer)),
+);
+
+it.live("preserves custom native setup and rejects conflicting legacy settings before writes", () =>
+  Effect.gen(function*() {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-setup-custom-")));
+    try {
+      const home = join(root, "home");
+      const configPath = join(root, "init.lua");
+      const source = join(root, "bin");
+      const legacyConfigPath = join(root, "config.json");
+      const lua = "-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\nreturn {}\n";
+      const custom = '-- user settings\n-- BEGIN rex-worktrees\nrequire("rex-worktrees").setup({ roots = { "~/Projects" }, bin = "/custom/bin" })\n-- END rex-worktrees\n-- rest\n';
+      yield* Effect.promise(() => writeFile(source, "binary"));
+      yield* Effect.promise(() => writeFile(configPath, custom));
+      yield* Effect.promise(() => writeFile(legacyConfigPath, '{"roots":["/legacy"]}'));
+      const options = { source, home, configPath, legacyConfigPath, lua, rexBinDir: join(root, "rex-cli") };
+      expect((yield* Effect.flip(installSetup(options))).message).toContain("Move roots/projects/worktreeRoot");
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(custom);
+      expect(yield* Effect.promise(() => readFile(legacyConfigPath, "utf8"))).toBe('{"roots":["/legacy"]}');
+      expect(yield* Effect.promise(() => lstat(join(root, "rex-worktrees.lua")).then(() => true, () => false))).toBe(false);
+      yield* Effect.promise(() => rm(legacyConfigPath));
+      yield* installSetup(options);
+      yield* installSetup(options);
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(custom);
     } finally {
       yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
     }

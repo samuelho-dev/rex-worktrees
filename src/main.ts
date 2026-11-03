@@ -61,7 +61,7 @@ const main = Effect.gen(function*() {
   if (Object.keys(flags).some(key => key !== "--bin" && key !== "--config") || (flags["--config"] && !flags["--bin"])) return yield* Effect.fail(new AppError({ message: "Invalid setup flags: --config requires --bin" }))
   if (!compiled) return yield* Effect.fail(new AppError({ message: "Build first with bun run build, then run ./dist/rex-worktrees setup" }))
   const installed = yield* setup(flags["--bin"], flags["--config"])
-  yield* Console.log(`${flags["--bin"] ? "Registered binary" : "Installed binary"}: ${installed.bin}\nInstalled Lua module: ${installed.luaPath}\nUpdated Rex config: ${installed.configPath}${flags["--config"] ? "\nRex will load the registration when it next starts." : "\nRun rex config reload to activate."}`)
+  yield* Console.log(`${flags["--bin"] ? "Registered binary" : "Installed binary"}: ${installed.bin}\nInstalled Lua module: ${installed.luaPath}\nUpdated Rex config: ${installed.configPath}${installed.migrated ? "\nMigrated legacy JSON settings to Rex Lua; preserved config.json.backup." : ""}${flags["--config"] ? "\nRex will load the registration when it next starts." : "\nRun rex config reload to activate."}`)
   return
  }
  if (verb === "popup") {

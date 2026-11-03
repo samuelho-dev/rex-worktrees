@@ -78,27 +78,28 @@ The form adds no extra spacing between its side borders and content; selection g
 
 ## Projects and checkout locations
 
-Configuration is optional and belongs on the **execution machine** at `${XDG_CONFIG_HOME:-~/.config}/rex-worktrees/config.json`:
+Configuration is optional and belongs in the **execution machine's Rex `init.lua`**, in the managed registration installed by setup:
 
-```json
-{
-  "projects": [
+```lua
+-- BEGIN rex-worktrees
+require("rex-worktrees").setup({
+  projects = {
     "/absolute/path/to/project",
-    {
-      "path": "/absolute/path/to/another-project",
-      "worktreeRoot": "/absolute/path/to/another-project-checkouts"
-    }
-  ],
-  "roots": ["/absolute/path/to/projects"],
-  "worktreeRoot": "/absolute/path/to/checkouts"
-}
+    { path = "/absolute/path/to/another-project", worktreeRoot = "/absolute/path/to/another-project-checkouts" },
+  },
+  roots = { "/absolute/path/to/projects" },
+  worktreeRoot = "/absolute/path/to/checkouts",
+})
+-- END rex-worktrees
 ```
 
 `projects` explicitly registers paths; optional `roots` scans two directory levels for projects. Without either, the originating Rex pane's directory (or the CLI caller's directory) can suggest its Git or JJ project, but no parent directory is scanned. A local directory suggestion is not sent to another machine: paths typed in the form are interpreted on the selected destination. For a known project missing there, the proposed clone directory uses that machine's first configured root, otherwise the parent of its last successful clone, otherwise the one common parent of discovered projects, otherwise its home directory. This default never scans the home directory and can be changed in **Clone to**. A successful clone remembers its destination parent; editing or reviewing one does not. Git and JJ, not configuration, determine their existing checkouts and branches/revisions. Existing valid directories continue through ordinary open.
 
+Setup leaves custom `setup({...})` settings untouched on upgrades; its installed binary path lives in the managed module, so no `bin` setting is needed. An explicit `bin` option overrides that installed path. After editing `init.lua`, run `rex config reload` on that machine. A default setup invocation migrates the former `${XDG_CONFIG_HOME:-~/.config}/rex-worktrees/config.json` to native Lua settings, resolving relative paths against the old JSON directory, saving the original as `config.json.backup`, and removing the old runtime config. If custom Lua settings conflict with legacy JSON, setup stops before making changes: transfer the legacy values into `setup({...})`, back up and remove the JSON file yourself, then rerun. `setup --config` targets an explicit Rex init and never migrates the current user's JSON file. Runtime association state remains separate at `${XDG_STATE_HOME:-~/.local/state}/rex-worktrees/associations`.
+
 For a popup launched from a Rex pane on this machine, the chooser checks that exact pane's reported directory (a local OSC 7 `file://` URI or absolute path). If that directory is absent or its URI is not trusted as local, it uses the same verified pane's foreground process `cwd` when available. A remote pane or foreign URI is never treated as a local path. Context can legitimately be absent if the pane has no usable local directory, or the directory is not inside a Git or JJ repository; select or enter a project in that case. `--no-context` explicitly disables origin discovery.
 
-New checkout location follows this order: a project's `worktreeRoot/<name>`, the global `worktreeRoot/<primary-project-name>/<name>`, or, by default, a sibling `<main-checkout>.worktrees/<name>`. `~` refers to the destination user's home; relative configuration paths resolve against the config file's directory. Checkout locations must be outside existing checkouts and version-control metadata. Collisions and escaping paths are rejected rather than renamed. JJ's own `git.colocate` setting governs whether its workspace also has Git metadata; the helper does not emulate colocation.
+New checkout location follows this order: a project's `worktreeRoot/<name>`, the global `worktreeRoot/<primary-project-name>/<name>`, or, by default, a sibling `<main-checkout>.worktrees/<name>`. `~` refers to the destination user's home; relative paths resolve against that machine's Rex config directory (the directory containing `init.lua`). Checkout locations must be outside existing checkouts and version-control metadata. Collisions and escaping paths are rejected rather than renamed. JJ's own `git.colocate` setting governs whether its workspace also has Git metadata; the helper does not emulate colocation.
 
 ## CLI
 
@@ -119,6 +120,8 @@ rex-worktrees open --repo /absolute/path/jj-workspace \
   --revision 'main@origin' --worktree-name task \
   --session session:FULL-ID --name Task
 ```
+
+Standalone CLI invocations obtain settings from the execution machine's native `worktrees_config` Rex action; register `require("rex-worktrees").setup(...)` there and reload Rex first. An unregistered action is an error, not a fallback to the former JSON file. The popup and Rex action paths pass those settings directly to the destination helper.
 
 `popup` runs the chooser in the invoking terminal; `launch-popup` opens its floating UI in the source Rex window. For `launch-popup` from an external terminal, supply `--session`; inside Rex, the originating session is available automatically. The `worktrees_open` shortcut delegates to the originating Rex server when invoked from a remote tab, so its popup and helper run on that machine. `launch-popup --host` keeps the UI on the caller's server while selecting another execution host. `--host` accepts an existing Rex host label or registry ID; find exact destination session IDs with `rex -S HOST ls --json`. `open --session` still requires an existing exact ID; new-session naming is available in the popup. Remote `--repo` and `--worktree` paths must be absolute paths on the destination.
 
