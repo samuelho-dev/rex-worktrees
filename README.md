@@ -74,6 +74,8 @@ The chooser is one flat form: **Project**, **Machine**, **Checkout** (or **Works
 
 Use arrows or `j`/`k` to move, Tab/Shift+Tab to change fields, and Enter to edit or select the form action. In an editor, Enter or Ctrl+S **only accepts that field** and returns to the form; it never reviews or launches. Submit explicitly from the form: the first submit validates the current plan and opens or creates the selected checkout, JJ workspace, clone, or new session when there is no warning. A warning, display limitation, or reviewed path differing from an explicitly selected existing checkout shows the actual plan and requires another submit; if a previously reviewed plan changes, its updated destination or target is shown and must be submitted again. Clone validation includes the source URL and destination; only pushed history transfers. No agent or model is required; the task opens a shell.
 
+The form adds no extra spacing between its side borders and content; selection gutters remain visible.
+
 ## Projects and checkout locations
 
 Configuration is optional and belongs on the **execution machine** at `${XDG_CONFIG_HOME:-~/.config}/rex-worktrees/config.json`:
@@ -118,7 +120,7 @@ rex-worktrees open --repo /absolute/path/jj-workspace \
   --session session:FULL-ID --name Task
 ```
 
-`popup` runs the chooser in the invoking terminal; `launch-popup` opens its floating UI in the source Rex window. For `launch-popup` from an external terminal, supply `--session`; inside Rex, the originating session is available automatically. `launch-popup --host` keeps the UI on the caller's server while selecting another execution host. `--host` accepts an existing Rex host label or registry ID; find exact destination session IDs with `rex -S HOST ls --json`. `open --session` still requires an existing exact ID; new-session naming is available in the popup. Remote `--repo` and `--worktree` paths must be absolute paths on the destination.
+`popup` runs the chooser in the invoking terminal; `launch-popup` opens its floating UI in the source Rex window. For `launch-popup` from an external terminal, supply `--session`; inside Rex, the originating session is available automatically. The `worktrees_open` shortcut delegates to the originating Rex server when invoked from a remote tab, so its popup and helper run on that machine. `launch-popup --host` keeps the UI on the caller's server while selecting another execution host. `--host` accepts an existing Rex host label or registry ID; find exact destination session IDs with `rex -S HOST ls --json`. `open --session` still requires an existing exact ID; new-session naming is available in the popup. Remote `--repo` and `--worktree` paths must be absolute paths on the destination.
 
 `open` detects Git or JJ at `--repo`; no VCS switch is needed. Git accepts `--branch` or `--worktree`, with `--worktree-name` for a new branch checkout. JJ accepts `--worktree` for an existing workspace, or `--revision` plus `--worktree-name` for a new workspace. `--repo` is the actual invoking JJ workspace on the destination: relative revisions such as `@-` resolve there, and creating a new workspace may snapshot it. `--name` independently labels the tab or pane. By default, a matching live tab is reused; `--additional` opens another tab, and `--split` splits a matching task or falls back to a new tab. These two flags cannot be combined. `--client ID` selects an exact Rex app client when needed. See `rex-worktrees --help` for popup origin/context flags.
 

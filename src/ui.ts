@@ -18,9 +18,9 @@ const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width
 /** Pure frame used by the terminal painter and the narrow-screen/security checks. */
 export const renderFormFrame = (view: FormView, focused: FormField, editing: boolean, columns: number, rows: number, colors = !process.env.NO_COLOR, fill = true): string => {
   const width = Math.max(20, columns)
-  const inside = width - 4
+  const inside = width - 2
   const screen: string[] = []
-  const border = (body: string) => `${color("│", "muted", colors)} ${pad(body, inside)} ${color("│", "muted", colors)}`
+  const border = (body: string) => `${color("│", "muted", colors)}${pad(body, inside)}${color("│", "muted", colors)}`
   const line = (left: string, right: string) => color(`${left}${"─".repeat(width - 2)}${right}`, "muted", colors)
   const add = (text: string) => screen.push(border(fit(text, inside)))
   screen.push(line("┌", "┐"))

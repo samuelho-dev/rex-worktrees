@@ -49,6 +49,13 @@ function M.setup(opts)
     run = function(ctx)
       local session_id = ctx.session_id or rex.session_id
       if type(session_id) ~= "string" then error("Select a Rex session first", 0) end
+      if ctx.server then
+        local response, call_err = rex.server(ctx.server).call("client.action", {
+          action = "worktrees_open", session_id = session_id, block_id = ctx.block_id,
+        })
+        if not response then error(call_err, 0) end
+        return response.result
+      end
       local command = { bin, "launch-popup", "--session", session_id }
       local block_id = ctx.block_id or (session_id == rex.session_id and rex.block_id or nil)
       if type(block_id) == "string" then
