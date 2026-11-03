@@ -40,7 +40,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "switch-pending" | "changed" | "jj" | "detached" | "long",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "switch-pending" | "changed" | "redirect" | "warning" | "clone-warning" | "clone-changed" | "jj" | "detached" | "long",
   run: (pty: {
     output: () => string;
     waitForText: (text: string | RegExp, from?: number) => Promise<void>;
@@ -83,6 +83,7 @@ async function withPopup(
         { expression: "candidate", label: "candidate", revision: { commitId: "b".repeat(40), changeId: "m".repeat(32), description: "alternate" } }
       ] : [];
       let reviewCount = 0;
+      let cloneReviewCount = 0;
       const connect = machine => scenario === "connect" && machine.key === "remote"
         ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
         : Effect.succeed(machine);
@@ -114,17 +115,21 @@ async function withPopup(
               ? "Cannot write clone destination parent: " + input.repo
               : "Clone destination already exists and is not a repository: " + input.repo }))
             : Effect.succeed({ vcs: "git", input, hostId: remote.hostId,
-              repo: input.repo, existing: false, label: "Clone & Open", detail: "Destination: " + input.repo });
+              repo: scenario === "clone-changed" && ++cloneReviewCount > 1 ? "/safe/alpha.changed" : input.repo,
+              existing: false, label: "Clone & Open", detail: "Destination: " + input.repo,
+              ...(scenario === "clone-warning" || scenario === "clone-changed" ? { warning: "Multiple Rex apps are connected" } : {}) });
         },
-        submitClone: () => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED\\n"); return { sessionId: "session-local", repo: "/safe/alpha" }; }),
+        submitClone: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED " + JSON.stringify(input.session) + " " + plan.repo + "\\n"); return { sessionId: "session-local", repo: plan.repo }; }),
         review: (_, __, input) => Effect.sync(() => {
           process.stderr.write("REVIEW_CALLED " + JSON.stringify(input) + "\\n");
-          const path = scenario === "changed" && ++reviewCount > 1 ? "/projects/alpha.changed" : project.path;
+          const path = scenario === "redirect" ? "/projects/other" :
+            scenario === "changed" && ++reviewCount > 1 ? "/projects/alpha.changed" : project.path;
           return { vcs: input.vcs, input, hostId: host.hostId,
             path, action: "new-tab", checkout: input.path ? "existing" : "create",
             ...(input.vcs === "git" ? { branch: input.branch ?? "main" } : {}),
             nameRole: "tab", name: input.name,
-            label: input.path ? "Open reviewed checkout" : "Create checkout & open" };
+            label: input.path ? "Open tab" : input.vcs === "jj" ? "Create workspace & open" : "Create worktree & open",
+            ...(scenario === "warning" || scenario === "changed" ? { warning: "Multiple Rex apps are connected" } : {}) };
         }),
         submit: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + " " + plan.path + "\\n");
           return { sessionId: input.session.kind === "new" ? "created-id" : input.session.id, path: plan.path, action: "new-tab", pending: false }; })
@@ -266,9 +271,9 @@ for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
   }, 8000);
 }
 
-for (const [name, input, frame, selection, needsReview] of [
-  ["typed session matching an existing label stays new", "Same label\r", "New: Same label", { kind: "new", name: "Same label" }, true],
-  ["duplicate labels select the exact second session ID", "\x1b[B\x1b[B\r", /SESSION\s+Same label/, { kind: "existing", id: "session-second" }, false]
+for (const [name, input, frame, selection] of [
+  ["typed session matching an existing label stays new", "Same label\r", "New: Same label", { kind: "new", name: "Same label" }],
+  ["duplicate labels select the exact second session ID", "\x1b[B\x1b[B\r", /SESSION\s+Same label/, { kind: "existing", id: "session-second" }]
 ] as const) {
   it(name, async () => {
     await withPopup("session", async (pty) => {
@@ -281,12 +286,9 @@ for (const [name, input, frame, selection, needsReview] of [
       expect(pty.output()).not.toContain("REVIEW_CALLED");
       expect(pty.output()).not.toContain("LAUNCH_CALLED");
       pty.write("\x13");
-      if (needsReview) {
-        await pty.waitForText("Review this action");
-        expect(pty.output()).not.toContain("LAUNCH_CALLED");
-        pty.write("\x13");
-      }
       expect(await pty.exited).toBe(0);
+      expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
+      expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
       expect(pty.output()).toContain(`LAUNCH_CALLED ${JSON.stringify(selection)}`);
     });
   }, 8000);
@@ -325,7 +327,7 @@ it("typing an occupied Git branch opens its exact existing checkout", async () =
   });
 }, 8000);
 
-it("typed Git branch shows an independent directory row and requires review", async () => {
+it("typed Git branch shows an independent directory row and launches on one submit", async () => {
   await withPopup("edit", async (pty) => {
     await pty.waitForText(/CHECKOUT\s+alpha/);
     await pty.waitForText("Esc close");
@@ -349,13 +351,26 @@ it("typed Git branch shows an independent directory row and requires review", as
     await pty.waitForText(/DIRECTORY\s+custom-tree/);
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x13");
-    await pty.waitForText("Review this action");
+    expect(await pty.exited).toBe(0);
     expect(pty.output()).toContain('"branch":"feature/free"');
     expect(pty.output()).toContain('"worktreeName":"custom-tree"');
+    expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
+    expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
+  });
+}, 8000);
+
+it("a structured review warning waits for another explicit submit", async () => {
+  await withPopup("warning", async (pty) => {
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
+    pty.write("\x13");
+    const reviewed = await pty.waitForForm("Multiple Rex apps are connected");
+    expect(reviewed).toContain("Review this action");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\x13");
-    expect(await pty.exited).toBe(0);
+    await pty.waitForText("Opened with warning");
     expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
+    pty.write("\r");
+    expect(await pty.exited).toBe(0);
   });
 }, 8000);
 
@@ -369,7 +384,7 @@ it("a changed reviewed target is displayed and needs another explicit confirmati
     await pty.waitForForm(/CHECKOUT\s+feature\/free/, beforeBranch);
     const beforeReview = pty.output().length;
     pty.write("\x13");
-    await pty.waitForForm("Review this action", beforeReview);
+    await pty.waitForForm("Multiple Rex apps are connected", beforeReview);
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     const beforeChange = pty.output().length;
     pty.write("\x13");
@@ -378,12 +393,28 @@ it("a changed reviewed target is displayed and needs another explicit confirmati
     expect(displayed).toContain("Destination: /projects/alpha.changed");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\x13");
+    await pty.waitForText("Opened with warning");
+    expect(pty.output()).toContain("LAUNCH_CALLED {\"kind\":\"existing\",\"id\":\"session-local\"} /projects/alpha.changed");
+    pty.write("\r");
     expect(await pty.exited).toBe(0);
-    expect(pty.output()).toContain("LAUNCH_CALLED");
   });
 }, 8000);
 
-it("a new JJ workspace retains its name when the starting revision changes", async () => {
+it("a first review targeting another existing checkout waits for the changed path", async () => {
+  await withPopup("redirect", async (pty) => {
+    const form = await pty.waitForForm(/CHECKOUT\s+alpha/);
+    expect(form).toContain("/projects/alpha");
+    pty.write("\x13");
+    const changed = await pty.waitForForm("Destination or Rex target changed");
+    expect(changed).toContain("Destination: /projects/other");
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
+    pty.write("\x13");
+    expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"existing","id":"session-local"} /projects/other');
+  });
+}, 8000);
+
+it("a new JJ workspace retains its name and launches on one submit with the selected revision", async () => {
   await withPopup("jj", async (pty) => {
     await pty.waitForForm(/WORKSPACE\s+alpha/);
     pty.write("\t\t\r");
@@ -399,12 +430,11 @@ it("a new JJ workspace retains its name when the starting revision changes", asy
     const currentFrame = await pty.waitForForm(/START FROM\s+candidate/, beforeRevision);
     expect(currentFrame).toMatch(/WORKSPACE\s+task-space/);
     pty.write("\x13");
-    await pty.waitForText("REVIEW_CALLED");
+    expect(await pty.exited).toBe(0);
     expect(pty.output()).toContain('"worktreeName":"task-space"');
     expect(pty.output()).toContain('"revision":"' + "b".repeat(40) + '"');
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x1b");
-    expect(await pty.exited).toBe(0);
+    expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
+    expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
   });
 }, 8000);
 
@@ -430,11 +460,9 @@ it("a detached clone exposes required Branch in the flat form", async () => {
     pty.write("\x1b[B\r");
     await pty.waitForForm(/BRANCH\s+main/, beforeBranch);
     pty.write("\x13");
-    await pty.waitForText("CLONE_INPUT");
-    expect(pty.output()).toContain('"branch":"main"');
-    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\x1b");
     expect(await pty.exited).toBe(0);
+    expect(pty.output()).toContain('"branch":"main"');
+    expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
   });
 }, 8000);
 
@@ -482,15 +510,44 @@ it("clone path editor cannot launch; optional checkout name remains independent"
     await pty.waitForForm(/DIRECTORY\s+separate-checkout/, beforeNewName);
     expect(pty.output()).toContain("/safe/alpha");
     pty.write("\x13");
-    await pty.waitForText("CLONE_INPUT");
+    expect(await pty.exited).toBe(0);
     expect(pty.output()).toContain('"repo":"/safe/alpha"');
     expect(pty.output()).toContain('"worktreeName":"separate-checkout"');
-    expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\x13");
-    expect(await pty.exited).toBe(0);
-    expect(pty.output()).toContain("CLONE_LAUNCHED");
+    expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
   });
 }, 8000);
+
+for (const scenario of ["clone-warning", "clone-changed"] as const) {
+  it(`${scenario} requires confirmation of the reviewed clone target`, async () => {
+    await withPopup(scenario, async (pty) => {
+      await pty.waitForForm(/CHECKOUT\s+alpha/);
+      pty.write("\t\r");
+      await pty.waitForEditor("Execution machine");
+      pty.write("\x1b[B\r");
+      await pty.waitForForm(/CLONE TO\s+\/clones\/alpha/);
+      pty.write("\t\r");
+      await pty.waitForEditor("Clone to (absolute destination");
+      const beforeDestination = pty.output().length;
+      pty.write("/safe/alpha\r");
+      await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
+      pty.write("\x13");
+      const reviewed = await pty.waitForForm("Multiple Rex apps are connected");
+      expect(reviewed).toContain("Review this action");
+      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+      if (scenario === "clone-changed") {
+        const beforeChange = pty.output().length;
+        pty.write("\x13");
+        const changed = await pty.waitForForm("Clone destination or Rex target changed", beforeChange);
+        expect(changed).toContain("/safe/alpha.changed");
+        expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+      }
+      pty.write("\x13");
+      expect(await pty.exited).toBe(0);
+      expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
+      expect(pty.output()).toContain(`CLONE_LAUNCHED {"kind":"existing","id":"session-local"} ${scenario === "clone-changed" ? "/safe/alpha.changed" : "/safe/alpha"}`);
+    });
+  }, 8000);
+}
 
 for (const [kind, diagnostic] of [
   ["collision", "Clone destination already exists and is not a repository"],
@@ -514,10 +571,9 @@ for (const [kind, diagnostic] of [
       await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
       expect(pty.output()).not.toContain("CLONE_LAUNCHED");
       pty.write("\x13");
-      await pty.waitForText("REVIEW_CLONE /safe/alpha");
-      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-      pty.write("\x1b");
       expect(await pty.exited).toBe(0);
+      expect(pty.output()).toContain("REVIEW_CLONE /safe/alpha");
+      expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
     });
   }, 8000);
 }

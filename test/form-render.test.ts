@@ -60,6 +60,8 @@ describe("persistent form frame", () => {
     ).split("\r\n");
     expect(expanded).toHaveLength(required + 5);
     expect(expanded.at(-1)).toContain("┘");
+    expect(expanded[1]).toMatch(/^│\S/);
+    expect(expanded[3]).toMatch(/^│›/);
   });
 
   it("keeps initial and populated normal forms aligned, but grows for editors and long focused detail", () => {
@@ -74,7 +76,6 @@ describe("persistent form frame", () => {
       submitDisabled: true,
     };
     const main = popupTargetRows(view, 96);
-    expect(main).toBeGreaterThanOrEqual(16);
     expect(popupTargetRows(view, 96, true)).toBeGreaterThan(main);
     expect(popupTargetRows(initial, 96)).toBe(main);
     const detail = `Host ID: ${"remote-machine/".repeat(220)}final`;
@@ -109,8 +110,8 @@ describe("persistent form frame", () => {
     const frame = renderFormFrame(compact, "session", false, 60, 18, false);
     const content = frame
       .split("\r\n")
-      .filter((line) => line.startsWith("│ "))
-      .map((line) => line.slice(2, -2).trim())
+      .filter((line) => line.startsWith("│"))
+      .map((line) => line.slice(1, -1).trim())
       .join(" ")
       .replace(/\s+/g, " ");
     expect(content).toContain("Select an exact session");
@@ -167,8 +168,8 @@ describe("persistent form frame", () => {
     );
     const content = frame
       .split("\r\n")
-      .filter((line) => line.startsWith("│ "))
-      .map((line) => line.slice(2, -2).trim())
+      .filter((line) => line.startsWith("│"))
+      .map((line) => line.slice(1, -1).trim())
       .join(" ")
       .replace(/\s+/g, " ");
     expect(content.split(message)).toHaveLength(2);
