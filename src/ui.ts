@@ -519,7 +519,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           {
             id: "session", label: "Session", value: draft.session?.kind === "new" ? `New: ${draft.session.name}`
               : sessions.find(s => s.id === (draft.session?.kind === "existing" ? draft.session.id : undefined))?.label ?? (draft.session?.kind === "existing" ? draft.session.id : "Choose or type new session"),
-            detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on confirmation" : undefined, disabled: !draft.host
+            detail: draft.session?.kind === "existing" ? draft.session.id : draft.session?.kind === "new" ? "Create on submit" : undefined, disabled: !draft.host
           }
         ]
         if (draft.project?.vcs === "jj" && !draft.destination?.path || draft.clone?.vcs === "jj")
@@ -540,15 +540,19 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           id: "mode", label: "Mode", value: draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
             : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host
         })
-        const safeOpen = !draft.clone && !!draft.destination?.path && draft.session?.kind === "existing"
+        const awaitingConfirmation = !!(clonePlan || plan)
         return {
           rows: rows.map(row => ({ ...row, disabled: initializing || row.disabled })),
-          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Review clone" : safeOpen ? "Open checkout" : "Review & open"),
+          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Clone & Open" :
+            draft.destination?.path ? "Open checkout" : draft.project?.vcs === "jj" ? "Create workspace & open" : "Create checkout & open"),
           submitDisabled: initializing || !draft.host || !(cloneInputFor(draft) || inputFor(draft)),
-          notice: [clonePlan || plan ? "Review this action; submit again to launch" : draft.clone ? "Only pushed history transfers" : undefined,
-          plan ? `Destination: ${plan.path}` : undefined, clonePlan?.detail,
+          notice: [awaitingConfirmation ? "Review this action; submit again to launch" : draft.clone ? "Only pushed history transfers" : undefined,
+          clonePlan?.warning, plan?.warning,
+          plan ? `Destination: ${plan.path}` : undefined,
+          clonePlan && clonePlan.repo !== draft.clone?.repo ? `Changed destination: ${clonePlan.repo}` : undefined,
+          clonePlan?.detail,
           clonePlan?.vcs === "jj" ? `Start from: ${draft.destination?.revision ? `${draft.destination.label} (${draft.destination.revision})` : "cloned default"}` : undefined,
-          clonePlan?.warning, plan?.detail, plan?.warning].filter(Boolean).join(" · ") || undefined,
+          plan?.detail].filter(Boolean).join(" · ") || undefined,
           error: initializing ? undefined : error ?? (!draft.projectChoice ? "Select a project" : !draft.machine ? "Select a Rex machine"
             : !draft.host ? "Connect to the selected machine and install its worktrees helper if missing"
               : !(draft.project || draft.clone) ? "Select the exact project directory on this machine"
@@ -585,9 +589,16 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           if (cloneInput) {
             const current = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
             if (Result.isFailure(current)) { error = problem(current.failure); clonePlan = undefined; continue }
-            if (!clonePlan || !sameClonePlan(current.success, clonePlan)) {
-              error = clonePlan ? "Clone destination or Rex target changed; review the updated URL and destination before submitting again" : undefined
+            if (clonePlan && (!sameClonePlan(current.success, clonePlan) || current.success.warning !== clonePlan.warning)) {
+              error = `Clone destination or Rex target changed; review the updated URL and destination before submitting again. Destination: ${current.success.repo}`
               clonePlan = current.success
+              continue
+            }
+            const wasReviewed = !!clonePlan
+            clonePlan = current.success
+            if (!wasReviewed && (clonePlan.warning || safeDisplayText(clonePlan.repo) !== clonePlan.repo ||
+              view.fitWarning || naturalFormRows(view, yield* terminal.columns) + 1 > (yield* terminal.rows))) {
+              error = undefined
               continue
             }
             const launched = yield* Effect.result(submitClone(draft.host, command, cloneInput, clonePlan))
@@ -608,19 +619,18 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           if (!input) continue
           const current = yield* Effect.result(review(draft.host, command, input))
           if (Result.isFailure(current)) { error = problem(current.failure); plan = undefined; continue }
-          if (plan && !sameLaunchPlan(current.success, plan)) {
-            error = "Destination or Rex target changed; review the updated action before submitting again"
+          if (plan && (!sameLaunchPlan(current.success, plan) || current.success.warning !== plan.warning)) {
+            error = `Destination or Rex target changed; review the updated action before submitting again. Destination: ${current.success.path}`
             plan = current.success
             continue
           }
-          if (!plan) {
-            const safeOpen = !!draft.destination?.path && draft.session?.kind === "existing" &&
-              current.success.checkout === "existing" && current.success.path === draft.destination.path &&
-              safeDisplayText(draft.destination.path) === draft.destination.path &&
-              !current.success.detail && !current.success.warning && !view.fitWarning &&
-              naturalFormRows(view, yield* terminal.columns) + 1 <= (yield* terminal.rows)
-            plan = current.success
-            if (!safeOpen) { error = undefined; continue }
+          const wasReviewed = !!plan
+          const changedPath = !wasReviewed && !!input.path && current.success.path !== input.path
+          plan = current.success
+          if (!wasReviewed && (changedPath || plan.warning || safeDisplayText(plan.path) !== plan.path ||
+            view.fitWarning || naturalFormRows(view, yield* terminal.columns) + 1 > (yield* terminal.rows))) {
+            error = changedPath ? `Destination or Rex target changed; review the updated action before submitting again. Destination: ${plan.path}` : undefined
+            continue
           }
           const launched = yield* Effect.result(submit(draft.host, command, input, plan))
           if (Result.isFailure(launched)) {
