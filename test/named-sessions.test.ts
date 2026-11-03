@@ -42,6 +42,7 @@ if (cmd[0] === "whoami") result = { host_id: "fixture-host", endpoint: "unix:///
 else if (cmd[0] === "ls") result = { sessions: [{ session_id: "old-id", label: "Same label" },
   ...Array.from({ length: created }, (_, index) => ({ session_id: "created-" + (index + 1), label: "Same label" }))] };
 else if (cmd[0] === "client" && cmd[1] === "ls") result = { clients: [] };
+else if (cmd[0] === "do" && cmd[1] === "worktrees_config") result = JSON.stringify({ config: {}, directory: process.env.XDG_CONFIG_HOME + "/rex" });
 else if (cmd[0] === "api" && cmd[1] === "call" && cmd[2] === "session.create") result = { session_id: "created-" + created };
 else if (cmd[0] === "window" && cmd[1] === "new") result = { window_id: "new-window", block_ids: ["new-block"] };
 else if (cmd[0] === "window" && cmd[1] === "ls") result = { windows: [{ window_id: "new-window", label: "Clone task", layers: [{ blocks: [{ block_id: "new-block", host_id: "fixture-host" }] }] }] };
