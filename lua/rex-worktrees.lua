@@ -17,7 +17,8 @@ function M.setup(opts)
   if type(bin) ~= "string" or bin:sub(1, 1) ~= "/" then
     error("rex-worktrees: set HOME or provide an absolute bin path", 0)
   end
-  local config_dir = installed_config_dir or os.getenv("REX_CONFIG")
+  local rex_config = os.getenv("REX_CONFIG")
+  local config_dir = installed_config_dir or (rex_config and (rex_config:match("^(.+)/[^/]+$") or (rex_config:match("^/[^/]+$") and "/") or rex_config))
     or (os.getenv("XDG_CONFIG_HOME") and os.getenv("XDG_CONFIG_HOME") .. "/rex")
     or (home and home .. "/.config/rex")
   if type(config_dir) ~= "string" or config_dir:sub(1, 1) ~= "/" then
