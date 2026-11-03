@@ -81,12 +81,13 @@ export const ConfigSchema = Schema.Struct({
   worktreeRoot: Schema.optional(Schema.String)
 })
 export type Config = typeof ConfigSchema.Type
+export const NativeConfigSchema = Schema.Struct({ config: ConfigSchema, directory: Schema.String })
 export const ResolvedConfigSchema = Schema.Struct({
   roots: Schema.Array(Schema.String), projects: Schema.Array(Schema.String), worktreeRoot: Schema.UndefinedOr(Schema.String),
   projectRoots: Schema.Array(Schema.Struct({ path: Schema.String, worktreeRoot: Schema.String }))
 })
 export type ResolvedConfig = typeof ResolvedConfigSchema.Type
-export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String), allowLinkedConfig: Schema.optional(Schema.Boolean) })
+export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String), allowLinkedConfig: Schema.optional(Schema.Boolean), legacyConfigPath: Schema.optional(Schema.String) })
 export type Install = typeof InstallSchema.Type
 export const AssociationSchema = Schema.Struct({
   vcs: VcsSchema, hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
@@ -249,6 +250,7 @@ export const ResponseSchema = Schema.Union([
 export type Response = typeof ResponseSchema.Type
 // Native Lua actions return an opaque JSON string inside Rex's JSON response.
 export const RexWorktreesResponseSchema = Schema.fromJsonString(Schema.fromJsonString(ResponseSchema))
+export const RexNativeConfigResponseSchema = Schema.fromJsonString(Schema.fromJsonString(NativeConfigSchema))
 
 export const PopupOriginSchema = Schema.Struct({ sessionId: Schema.optional(SessionIdSchema), blockId: Schema.optional(BlockIdSchema), clientId: Schema.optional(ClientIdSchema) })
 export type PopupOrigin = typeof PopupOriginSchema.Type

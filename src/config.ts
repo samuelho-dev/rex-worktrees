@@ -1,26 +1,29 @@
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Effect, Path, Schema } from "effect"
 import { repository, project } from "./repositories.ts"
 import { missing, notRepository } from "./git.ts"
-import { AppError, ConfigSchema, type ResolvedConfig } from "./contracts.ts"
+import { AppError, NativeConfigSchema, RexNativeConfigResponseSchema, type ResolvedConfig } from "./contracts.ts"
 import { rememberedCloneRoot } from "./state.ts"
+import { rex } from "./rex.ts"
 
 
 
 export const loadConfig = Effect.gen(function*() {
-  const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const raw = process.env.REX_WORKTREES_CONFIG
+  const { config: values, directory } = raw === undefined
+    ? yield* rex(["do", "worktrees_config", "--json"]).pipe(
+      Effect.mapError(() => new AppError({ message: "Native Rex worktrees_config is unavailable; register rex-worktrees.setup in this machine's Rex config and reload it" })),
+      Effect.flatMap((response) => Schema.decodeUnknownEffect(RexNativeConfigResponseSchema)(response))
+    )
+    : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(NativeConfigSchema))(raw)
+  if (!path.isAbsolute(directory) || directory.includes("\0")) {
+    return yield* new AppError({ message: "Native Rex config directory must be an absolute path" })
+  }
   const home = process.env.HOME
-  if (!home) return yield* new AppError({ message: "HOME is required" })
-  const configHome = process.env.XDG_CONFIG_HOME || path.join(home, ".config")
-  if (!path.isAbsolute(configHome)) return yield* new AppError({ message: "Config home must be absolute" })
-  const filename = path.join(configHome, "rex-worktrees", "config.json")
-  const exists = yield* fs.exists(filename)
-  const values = exists
-    ? yield* fs.readFileString(filename).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ConfigSchema))))
-    : { roots: undefined, projects: undefined, worktreeRoot: undefined }
+  if (!home || !path.isAbsolute(home)) return yield* new AppError({ message: "HOME must be an absolute directory" })
   const expand = (value: string) => {
     const expanded = value === "~" ? home : value.startsWith("~/") ? path.join(home, value.slice(2)) : value
-    return path.resolve(path.dirname(filename), expanded)
+    return path.resolve(directory, expanded)
   }
   const config: ResolvedConfig = {
     roots: (values.roots ?? []).map(expand),

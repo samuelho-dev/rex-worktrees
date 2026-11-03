@@ -1,6 +1,8 @@
 -- rex-worktrees: managed module
 local installed_rex_bin_dir = false
 local installed_path_env = false
+local installed_bin = false
+local installed_config_dir = false
 -- Opening is opt-in via opts.key.
 local M = {}
 
@@ -11,13 +13,24 @@ function M.setup(opts)
     error("rex-worktrees: rex_bin_dir must be an absolute directory", 0)
   end
   local home = os.getenv("HOME")
-  local bin = opts.bin or (home and home .. "/.local/bin/rex-worktrees")
+  local bin = opts.bin or installed_bin or (home and home .. "/.local/bin/rex-worktrees")
   if type(bin) ~= "string" or bin:sub(1, 1) ~= "/" then
     error("rex-worktrees: set HOME or provide an absolute bin path", 0)
   end
+  local config_dir = installed_config_dir or os.getenv("REX_CONFIG")
+    or (os.getenv("XDG_CONFIG_HOME") and os.getenv("XDG_CONFIG_HOME") .. "/rex")
+    or (home and home .. "/.config/rex")
+  if type(config_dir) ~= "string" or config_dir:sub(1, 1) ~= "/" then
+    error("rex-worktrees: Rex config directory must be absolute", 0)
+  end
+  local config = { roots = opts.roots, projects = opts.projects, worktreeRoot = opts.worktreeRoot }
+  if type(config.roots) == "table" and next(config.roots) == nil then config.roots = nil end
+  if type(config.projects) == "table" and next(config.projects) == nil then config.projects = nil end
+  local settings = rex.json.encode({ config = config, directory = config_dir })
 
   local function worktrees_request(request)
     local exec_opts = { stdin = request, timeout = 20, env = {} }
+    exec_opts.env.REX_WORKTREES_CONFIG = settings
     if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
     if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
     if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
@@ -40,6 +53,13 @@ function M.setup(opts)
     run = function(_, args)
       return worktrees_request(args.request)
     end,
+  }
+
+  rex.action{
+    name = "worktrees_config",
+    title = "Read this machine's worktree settings",
+    description = "Return destination-local settings to standalone rex-worktrees commands",
+    run = function() return settings end,
   }
 
   rex.action{
@@ -69,6 +89,7 @@ function M.setup(opts)
         table.insert(command, ctx.client_id)
       end
       local exec_opts = { timeout = 20, env = {} }
+      exec_opts.env.REX_WORKTREES_CONFIG = settings
       if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
       if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
       if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
