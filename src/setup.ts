@@ -63,8 +63,9 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
     managedRegistration.test(existing) ||
     /require\s*\(?\s*["']rex-worktrees["']\s*\)?\.setup\s*\(/.test(existing)
   )) return yield* fail(`Malformed rex-worktrees registration in ${configPath}`)
-  if (start < 0 && /require\s*\(?\s*["']rex-worktrees["']/.test(current)) return yield* fail(`Existing rex-worktrees registration in ${configPath}; remove it before setup`)
-  const simple = existing === undefined || existing === manualRegistration || (existing !== undefined && managedRegistration.test(existing))
+  // ponytail: a user-owned require may register through an alias; never add a second setup call.
+  const unmarkedRegistration = start < 0 && /require\s*\(?\s*["']rex-worktrees["']/.test(current)
+  const simple = !unmarkedRegistration && (existing === undefined || existing === manualRegistration || (existing !== undefined && managedRegistration.test(existing)))
   const legacyInfo = legacyConfigPath === undefined ? undefined : yield* info(legacyConfigPath)
   if (legacyInfo && legacyInfo.type !== "File") return yield* fail(`Refusing non-file legacy settings: ${legacyConfigPath}`)
   if (legacyInfo && !simple) return yield* fail(`Cannot merge legacy settings ${legacyConfigPath} with custom Rex registration in ${configPath}. Move roots/projects/worktreeRoot into require("rex-worktrees").setup({...}) manually, back up and remove the legacy JSON file, then rerun setup.`)
@@ -79,7 +80,7 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
     legacy.worktreeRoot === undefined ? undefined : `worktreeRoot = ${luaLiteral(expand(legacy.worktreeRoot))}`
   ].filter(value => value !== undefined).join(", ")
     } })\n-- END rex-worktrees\n`
-  const nextRegistration = legacyRegistration ?? (simple ? registration : existing!)
+  const nextRegistration = legacyRegistration ?? (simple ? registration : existing ?? "")
   const backup = legacyConfigPath === undefined ? undefined : `${legacyConfigPath}.backup`
   if (legacy && (yield* info(backup!))) return yield* fail(`Legacy settings backup already exists: ${backup}; preserve or move it before setup`)
   const sourceInfo = yield* fs.stat(source)
@@ -99,14 +100,14 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
       Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore))
     )
   })
-  if (legacyBytes !== undefined) yield* fs.writeFileString(backup!, legacyBytes, { flag: "wx" })
+  if (legacyBytes !== undefined) yield* fs.writeFileString(backup!, legacyBytes, { flag: "wx", mode: 0o600 })
   if (managedBin === undefined) {
     if (source !== bin) yield* atomic(bin, temporary => fs.copyFile(source, temporary).pipe(Effect.flatMap(() => fs.chmod(temporary, 0o755))))
     else yield* fs.chmod(bin, 0o755)
   }
   yield* atomic(luaPath, temporary => fs.writeFileString(temporary, installedLua, { flag: "wx", mode: 0o644 }))
-  if (start < 0) yield* fs.writeFileString(configPath, `${current && !current.endsWith("\n") ? "\n" : ""}${nextRegistration}`, { flag: "a" })
-  else if (existing !== nextRegistration) yield* fs.writeFileString(configPath, `${current.slice(0, start)}${nextRegistration}${current.slice(finish + end.length)}`)
+  if (start < 0 && !unmarkedRegistration) yield* fs.writeFileString(configPath, `${current && !current.endsWith("\n") ? "\n" : ""}${nextRegistration}`, { flag: "a" })
+  else if (start >= 0 && existing !== nextRegistration) yield* fs.writeFileString(configPath, `${current.slice(0, start)}${nextRegistration}${current.slice(finish + end.length)}`)
   if (legacy) yield* fs.remove(legacyConfigPath!)
   return { bin, luaPath, configPath, migrated: legacy !== undefined }
 })

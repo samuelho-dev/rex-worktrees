@@ -299,6 +299,7 @@ it.live("migrates legacy JSON relative to its old directory and keeps its origin
       expect(init).toContain(`{ path = "${join(root, "old-settings", "repo")}", worktreeRoot = "${join(root, "checkouts")}" }`);
       expect(init).toContain(`worktreeRoot = "${join(root, "old-settings", "relative")}"`);
       expect(yield* Effect.promise(() => readFile(`${legacyConfigPath}.backup`, "utf8"))).toBe(old);
+      expect((yield* Effect.promise(() => lstat(`${legacyConfigPath}.backup`))).mode & 0o777).toBe(0o600);
       expect(yield* Effect.promise(() => lstat(legacyConfigPath).then(() => true, () => false))).toBe(false);
       expect((yield* installSetup(options)).migrated).toBe(false);
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(init);
@@ -330,6 +331,47 @@ it.live("preserves custom native setup and rejects conflicting legacy settings b
       yield* installSetup(options);
       yield* installSetup(options);
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(custom);
+    } finally {
+      yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
+    }
+  }).pipe(Effect.provide(BunServices.layer)),
+);
+
+it.live("preserves unmarked user registration through module and binary upgrades without duplicating setup", () =>
+  Effect.gen(function*() {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-setup-unmarked-")));
+    try {
+      const home = join(root, "home");
+      const configPath = join(root, "init.lua");
+      const source = join(root, "bin");
+      const legacyConfigPath = join(root, "config.json");
+      const rexBinDir = join(root, "rex-cli");
+      const lua = (version: string) => `-- rex-worktrees: managed module\nlocal installed_rex_bin_dir = false\nlocal installed_path_env = false\nlocal installed_bin = false\nlocal installed_config_dir = false\n-- ${version}\nreturn {}\n`;
+      const custom = `-- user's native Rex config\nrequire('rex-worktrees').setup({ roots = { ${JSON.stringify(join(home, "Projects"))} }, bin = "/custom/bin" })\nrex.action{ name = 'custom' }\n`;
+      yield* Effect.promise(() => writeFile(source, "binary-v1"));
+      yield* Effect.promise(() => writeFile(configPath, custom));
+      yield* Effect.promise(() => writeFile(legacyConfigPath, '{"roots":["/legacy"]}'));
+      const options = { source, home, configPath, legacyConfigPath, rexBinDir };
+      expect((yield* Effect.flip(installSetup({ ...options, lua: lua("v1") }))).message).toContain("Move roots/projects/worktreeRoot");
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(custom);
+      expect(yield* Effect.promise(() => readFile(legacyConfigPath, "utf8"))).toBe('{"roots":["/legacy"]}');
+      expect(yield* Effect.promise(() => lstat(join(root, "rex-worktrees.lua")).then(() => true, () => false))).toBe(false);
+      yield* Effect.promise(() => rm(legacyConfigPath));
+      const installed = yield* installSetup({ ...options, lua: lua("v1") });
+      expect(yield* Effect.promise(() => readFile(installed.bin, "utf8"))).toBe("binary-v1");
+      expect(yield* Effect.promise(() => readFile(installed.luaPath, "utf8"))).toContain("-- v1\n");
+      yield* Effect.promise(() => writeFile(source, "binary-v2"));
+      yield* installSetup({ ...options, lua: lua("v2") });
+      yield* installSetup({ ...options, lua: lua("v2") });
+      expect(yield* Effect.promise(() => readFile(installed.bin, "utf8"))).toBe("binary-v2");
+      expect(yield* Effect.promise(() => readFile(installed.luaPath, "utf8"))).toContain("-- v2\n");
+      const preserved = yield* Effect.promise(() => readFile(configPath, "utf8"));
+      expect(preserved).toBe(custom);
+      expect(preserved.match(/\.setup\(/g)).toHaveLength(1);
+      const aliased = `-- custom alias\nlocal worktrees = require('rex-worktrees')\nworktrees.setup({ roots = { "/other" } })\n`;
+      yield* Effect.promise(() => writeFile(configPath, aliased));
+      yield* installSetup({ ...options, lua: lua("v2") });
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(aliased);
     } finally {
       yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
     }
