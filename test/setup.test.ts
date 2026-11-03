@@ -277,7 +277,7 @@ it.live("registers a stable package bin without copying or changing either versi
   }).pipe(Effect.provide(BunServices.layer)),
 );
 
-it.live("migrates legacy JSON relative to its old directory and keeps its original backup", () =>
+it.live("migrates legacy JSON into native settings and removes the old directory", () =>
   Effect.gen(function*() {
     const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "rex-setup-migrate-")));
     try {
@@ -292,16 +292,44 @@ it.live("migrates legacy JSON relative to its old directory and keeps its origin
       yield* Effect.promise(() => writeFile(source, "binary"));
       yield* Effect.promise(() => writeFile(configPath, "-- other settings\n-- BEGIN rex-worktrees\nrequire(\"rex-worktrees\").setup()\n-- END rex-worktrees\n"));
       yield* Effect.promise(() => writeFile(legacyConfigPath, old));
+      const backup = `${legacyConfigPath}.backup`;
       const options = { source, home, configPath, legacyConfigPath, lua, rexBinDir: join(root, "rex-cli") };
+      yield* Effect.promise(() => mkdir(backup));
+      expect((yield* Effect.flip(installSetup(options))).message).toContain("Refusing non-file legacy backup");
+      expect(yield* Effect.promise(() => readFile(legacyConfigPath, "utf8"))).toBe(old);
+      yield* Effect.promise(() => rm(backup, { recursive: true }));
+      yield* Effect.promise(() => writeFile(backup, "stale backup"));
+      const originalInit = yield* Effect.promise(() => readFile(configPath, "utf8"));
+      yield* Effect.flip(installSetup({ ...options, source: join(root, "missing-bin") }));
+      expect(yield* Effect.promise(() => readFile(legacyConfigPath, "utf8"))).toBe(old);
+      expect(yield* Effect.promise(() => readFile(backup, "utf8"))).toBe("stale backup");
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(originalInit);
       expect((yield* installSetup(options)).migrated).toBe(true);
       const init = yield* Effect.promise(() => readFile(configPath, "utf8"));
       expect(init).toContain(`roots = { "${join(root, "projects")}", "${join(home, "src")}" }`);
       expect(init).toContain(`{ path = "${join(root, "old-settings", "repo")}", worktreeRoot = "${join(root, "checkouts")}" }`);
       expect(init).toContain(`worktreeRoot = "${join(root, "old-settings", "relative")}"`);
-      expect(yield* Effect.promise(() => readFile(`${legacyConfigPath}.backup`, "utf8"))).toBe(old);
-      expect((yield* Effect.promise(() => lstat(`${legacyConfigPath}.backup`))).mode & 0o777).toBe(0o600);
       expect(yield* Effect.promise(() => lstat(legacyConfigPath).then(() => true, () => false))).toBe(false);
+      expect(yield* Effect.promise(() => lstat(backup).then(() => true, () => false))).toBe(false);
+      expect(yield* Effect.promise(() => lstat(join(root, "old-settings")).then(() => true, () => false))).toBe(false);
       expect((yield* installSetup(options)).migrated).toBe(false);
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(init);
+      expect(yield* Effect.promise(() => lstat(join(root, "old-settings")).then(() => true, () => false))).toBe(false);
+      yield* Effect.promise(() => mkdir(join(root, "old-settings")));
+      yield* Effect.promise(() => writeFile(backup, "old backup from an earlier setup"));
+      const unrelated = join(root, "old-settings", "user-notes");
+      yield* Effect.promise(() => writeFile(unrelated, "keep me"));
+      expect((yield* installSetup(options)).migrated).toBe(false);
+      expect(yield* Effect.promise(() => lstat(backup).then(() => true, () => false))).toBe(false);
+      expect(yield* Effect.promise(() => readFile(unrelated, "utf8"))).toBe("keep me");
+      expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(init);
+      yield* Effect.promise(() => rm(unrelated));
+      yield* installSetup(options);
+      expect(yield* Effect.promise(() => lstat(join(root, "old-settings")).then(() => true, () => false))).toBe(false);
+      yield* Effect.promise(() => mkdir(join(root, "old-settings")));
+      yield* Effect.promise(() => writeFile(legacyConfigPath, old));
+      yield* installSetup({ source, home, configPath, lua, rexBinDir: join(root, "rex-cli") });
+      expect(yield* Effect.promise(() => readFile(legacyConfigPath, "utf8"))).toBe(old);
       expect(yield* Effect.promise(() => readFile(configPath, "utf8"))).toBe(init);
     } finally {
       yield* Effect.promise(() => rm(root, { recursive: true, force: true }));

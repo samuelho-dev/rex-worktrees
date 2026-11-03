@@ -1,3 +1,4 @@
+import { rmdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { Effect, FileSystem, Path, Schema, PlatformError } from "effect"
 import lua from "../lua/rex-worktrees.lua" with { type: "text" }
@@ -82,7 +83,8 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
     } })\n-- END rex-worktrees\n`
   const nextRegistration = legacyRegistration ?? (simple ? registration : existing ?? "")
   const backup = legacyConfigPath === undefined ? undefined : `${legacyConfigPath}.backup`
-  if (legacy && (yield* info(backup!))) return yield* fail(`Legacy settings backup already exists: ${backup}; preserve or move it before setup`)
+  const backupInfo = backup === undefined ? undefined : yield* info(backup)
+  if (backupInfo && backupInfo.type !== "File") return yield* fail(`Refusing non-file legacy backup: ${backup}`)
   const sourceInfo = yield* fs.stat(source)
   if (sourceInfo.type !== "File") return yield* fail(`Installer source is not a file: ${source}`)
   if (managedBin !== undefined) {
@@ -100,7 +102,9 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
       Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore))
     )
   })
-  if (legacyBytes !== undefined) yield* fs.writeFileString(backup!, legacyBytes, { flag: "wx", mode: 0o600 })
+  const legacyDir = legacyConfigPath === undefined ? undefined : path.dirname(legacyConfigPath)
+  const legacyDirInfo = legacyDir === undefined ? undefined : yield* info(legacyDir)
+  if (legacyDirInfo && legacyDirInfo.type !== "Directory") return yield* fail(`Refusing non-directory legacy settings path: ${legacyDir}`)
   if (managedBin === undefined) {
     if (source !== bin) yield* atomic(bin, temporary => fs.copyFile(source, temporary).pipe(Effect.flatMap(() => fs.chmod(temporary, 0o755))))
     else yield* fs.chmod(bin, 0o755)
@@ -108,7 +112,16 @@ export const installSetup = Effect.fnUntraced(function*({ source, home, configPa
   yield* atomic(luaPath, temporary => fs.writeFileString(temporary, installedLua, { flag: "wx", mode: 0o644 }))
   if (start < 0 && !unmarkedRegistration) yield* fs.writeFileString(configPath, `${current && !current.endsWith("\n") ? "\n" : ""}${nextRegistration}`, { flag: "a" })
   else if (start >= 0 && existing !== nextRegistration) yield* fs.writeFileString(configPath, `${current.slice(0, start)}${nextRegistration}${current.slice(finish + end.length)}`)
-  if (legacy) yield* fs.remove(legacyConfigPath!)
+  // ponytail: retire only known files after native settings are installed; rmdir is atomic and empty-only.
+  if (backupInfo) yield* fs.remove(backup!)
+  if (legacyInfo) yield* fs.remove(legacyConfigPath!)
+  if (legacyDirInfo) yield* Effect.tryPromise({
+    try: () => rmdir(legacyDir!).catch(error => {
+      if (error instanceof Error && "code" in error && (error.code === "ENOTEMPTY" || error.code === "EEXIST")) return
+      throw error
+    }),
+    catch: error => new AppError({ message: `Cannot remove legacy settings directory ${legacyDir}: ${String(error)}` })
+  })
   return { bin, luaPath, configPath, migrated: legacy !== undefined }
 })
 
