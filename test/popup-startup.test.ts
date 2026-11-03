@@ -252,13 +252,17 @@ it("fatal startup error remains visible until acknowledgement and exits nonzero"
 for (const [key, accept] of [["Enter", "\r"], ["Ctrl+S", "\x13"]] as const) {
   it(`project editor ${key} accepts an exact inspected checkout without reviewing or launching`, async () => {
     await withPopup("edit", async (pty) => {
-      await pty.waitForText(/CHECKOUT\s+alpha/);
-      await pty.waitForText("Esc close");
+      await pty.waitForForm(/CHECKOUT\s+alpha/);
       pty.write("\r");
-      await pty.waitForText("Project (select known");
-      const before = pty.output().length;
-      pty.write(`\x1b[B${accept}`);
-      await pty.waitForText(/CHECKOUT\s+alpha/, before);
+      await pty.waitForEditor("Project (select known");
+      const beforeSelection = pty.output().length;
+      pty.write("\x1b[B");
+      const editor = await pty.waitForEditor(/› alpha/, beforeSelection);
+      expect(editor).toMatch(/CHECKOUT\s+alpha/);
+      expect(editor).not.toContain("Tab next");
+      const beforeAccept = pty.output().length;
+      pty.write(accept);
+      await pty.waitForForm(/CHECKOUT\s+alpha/, beforeAccept);
       expect(pty.exitCode()).toBeNull();
       expect(pty.output()).not.toContain("REVIEW_CALLED");
       expect(pty.output()).not.toContain("LAUNCH_CALLED");
