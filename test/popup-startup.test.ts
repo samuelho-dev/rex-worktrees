@@ -18,25 +18,34 @@ const services = pathToFileURL(
   resolve(root, "node_modules/@effect/platform-bun/dist/BunServices.js"),
 ).href;
 
-const waitFor = (
-  predicate: () => boolean,
+const waitFor = <T>(
+  predicate: () => T | undefined,
   listen: (notify: () => void) => () => void,
 ) => {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
   // Real child-process PTY integration needs a wall-clock watchdog if the child hangs.
   const timeout = setTimeout(() => {
     unsubscribe();
     reject(new Error("Timed out waiting for the popup PTY"));
   }, 5000);
   const notify = () => {
-    if (!predicate()) return;
+    const match = predicate();
+    if (match === undefined || match === false) return;
     clearTimeout(timeout);
     unsubscribe();
-    resolve();
+    resolve(match);
   };
   const unsubscribe = listen(notify);
   notify();
   return promise;
+};
+
+const currentForm = (output: string, text: string | RegExp, from: number) => {
+  const start = output.lastIndexOf("\x1b[H\x1b[2J");
+  if (start < from) return undefined;
+  const frame = output.slice(start);
+  return frame.includes("└") && frame.includes("Tab next") &&
+    (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
 };
 
 async function withPopup(
@@ -149,6 +158,7 @@ async function withPopup(
     BunRuntime.runMain(Effect.provide(popup([], context), BunServices.layer));
   `;
   let output = "";
+  const decoder = new TextDecoder();
   const listeners = new Set<() => void>();
   const proc = Bun.spawn([process.execPath, "-e", script], {
     cwd: root,
@@ -157,7 +167,7 @@ async function withPopup(
       cols: kind === "long" ? 60 : 96,
       rows: kind === "long" ? 18 : kind === "edit" ? 16 : 24,
       data: (_, bytes) => {
-        output += new TextDecoder().decode(bytes);
+        output += decoder.decode(bytes, { stream: true });
         for (const listener of listeners) listener();
       },
     },
@@ -166,13 +176,6 @@ async function withPopup(
   const listen = (notify: () => void) => {
     listeners.add(notify);
     return () => { listeners.delete(notify); };
-  };
-  const currentForm = (text: string | RegExp, from: number) => {
-    const start = output.lastIndexOf("\x1b[H\x1b[2J");
-    if (start < from) return undefined;
-    const frame = output.slice(start);
-    return frame.includes("└") && frame.includes("Tab next") &&
-      (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
   };
   const currentEditor = (text: string | RegExp, from: number) => {
     const start = output.lastIndexOf("\x1b[H\x1b[2J");
@@ -186,17 +189,15 @@ async function withPopup(
       output: () => output,
       waitForText: (text, from = 0) => {
         awaiting = `text ${String(text)} after ${from}`;
-        return waitFor(() => typeof text === "string" ? output.slice(from).includes(text) : text.test(output.slice(from)), listen);
+        return waitFor(() => typeof text === "string" ? output.slice(from).includes(text) : text.test(output.slice(from)), listen).then(() => { });
       },
-      waitForForm: async (text, from = 0) => {
+      waitForForm: (text, from = 0) => {
         awaiting = `complete form ${String(text)} after ${from}`;
-        await waitFor(() => !!currentForm(text, from), listen);
-        return currentForm(text, from)!;
+        return waitFor(() => currentForm(output, text, from), listen);
       },
-      waitForEditor: async (text, from = 0) => {
+      waitForEditor: (text, from = 0) => {
         awaiting = `complete editor ${String(text)} after ${from}`;
-        await waitFor(() => !!currentEditor(text, from), listen);
-        return currentEditor(text, from)!;
+        return waitFor(() => currentEditor(text, from), listen);
       },
       write: (input) => proc.terminal!.write(input),
       exitCode: () => proc.exitCode,
@@ -331,28 +332,55 @@ it("typing an occupied Git branch opens its exact existing checkout", async () =
   });
 }, 8000);
 
+it("a complete native PTY form survives fragmented UTF-8 and the next partial redraw", async () => {
+  await withPopup("edit", async (pty) => {
+    const frame = await pty.waitForForm(/CHECKOUT\s+alpha/);
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+
+    const bytes = new TextEncoder().encode(frame);
+    const border = bytes.indexOf(0xe2);
+    expect(border).toBeGreaterThan(0);
+    const decoder = new TextDecoder();
+    let observed = "";
+    const listeners = new Set<() => void>();
+    const captured = waitFor(
+      () => currentForm(observed, /CHECKOUT\s+alpha/, 0),
+      (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
+    );
+    for (const chunk of [bytes.subarray(0, border + 1), bytes.subarray(border + 1)]) {
+      observed += decoder.decode(chunk, { stream: true });
+      for (const notify of listeners) notify();
+    }
+    // ponytail: replay only the PTY chunk boundary, not a second synthetic UI.
+    observed += "\x1b[H\x1b[2J┌";
+    for (const notify of listeners) notify();
+    expect(currentForm(observed, /CHECKOUT\s+alpha/, 0)).toBeUndefined();
+    expect(await captured).toBe(frame);
+  });
+}, 8000);
+
 it("typed Git branch shows an independent directory row and launches on one submit", async () => {
   await withPopup("edit", async (pty) => {
-    await pty.waitForText(/CHECKOUT\s+alpha/);
-    await pty.waitForText("Esc close");
-    expect(pty.output()).toContain("MODE");
-    expect(pty.output()).not.toContain("OPTIONS");
-    expect(pty.output()).not.toContain("  DIRECTORY  ");
+    const initial = await pty.waitForForm(/CHECKOUT\s+alpha/);
+    expect(initial).toContain("MODE");
+    expect(initial).not.toContain("OPTIONS");
+    expect(initial).not.toContain("  DIRECTORY  ");
     pty.write("\t\t\r");
-    await pty.waitForText("Checkout (");
+    await pty.waitForEditor("Checkout (");
     const beforeBranch = pty.output().length;
     pty.write("feature/free\r");
-    await pty.waitForText("Esc close", beforeBranch);
-    const branchFrame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    const branchFrame = await pty.waitForForm(/CHECKOUT\s+feature\/free/, beforeBranch);
     expect(branchFrame).toMatch(/CHECKOUT\s+feature\/free/);
     expect(branchFrame).toMatch(/DIRECTORY\s+Default/);
     expect(branchFrame).toContain("MODE");
     expect(branchFrame).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\t\t\r");
-    await pty.waitForText("Optional custom checkout directory name");
+    await pty.waitForEditor("Optional custom checkout directory name");
+    const beforeDirectory = pty.output().length;
     pty.write("custom-tree\r");
-    await pty.waitForText(/DIRECTORY\s+custom-tree/);
+    await pty.waitForForm(/DIRECTORY\s+custom-tree/, beforeDirectory);
     expect(pty.output()).not.toContain("REVIEW_CALLED");
     pty.write("\x13");
     expect(await pty.exited).toBe(0);
