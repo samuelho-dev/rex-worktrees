@@ -2,6 +2,8 @@
 
 Rex Worktrees opens Git worktrees or Jujutsu (JJ) workspaces in an exact [Rex](https://www.superlogical.com/rex/docs) session on this machine or an existing Rex host. Its keyboard-driven chooser runs in a floating Rex terminal. Rex manages hosts, connections, and sessions; this tool creates or selects a checkout and opens a shell there. When a selected logical project has no directory on the destination, the chooser can clone published history and open it there.
 
+<img width="697" height="240" alt="image" src="https://github.com/user-attachments/assets/7b9c2a9a-82b2-4493-a874-68850a89a2ee" />
+
 ## Install
 
 Standalone binaries are built for Apple Silicon Macs running macOS 15 or later and Linux x64 (Ubuntu 24.04 CI runner). Git 2.42 or later, the Rex CLI, and a running local Rex server are required for interactive use; JJ projects additionally require Jujutsu 0.46 or later. Node.js and npm are needed only to install the macOS ARM64 npm package, not to run either standalone executable; Bun is not required.
