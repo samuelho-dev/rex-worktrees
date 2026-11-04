@@ -2,7 +2,7 @@
 
 Rex Worktrees opens Git worktrees or Jujutsu (JJ) workspaces in an exact [Rex](https://www.superlogical.com/rex/docs) session on this machine or an existing Rex host. Its keyboard-driven chooser runs in a floating Rex terminal. Rex manages hosts, connections, and sessions; this tool creates or selects a checkout and opens a shell there. When a selected logical project has no directory on the destination, the chooser can clone published history and open it there.
 
-<img width="697" height="240" alt="image" src="https://github.com/user-attachments/assets/7b9c2a9a-82b2-4493-a874-68850a89a2ee" />
+<img width="693" height="236" alt="image" src="https://github.com/user-attachments/assets/fadd8e3c-30fc-4f94-98ca-41132a23ff36" />
 
 ## Install
 
