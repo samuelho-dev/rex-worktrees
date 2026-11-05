@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 
 const metadata = JSON.parse(readFileSync("package.json", "utf8"));
 const [packed] = JSON.parse(readFileSync("pack.json", "utf8"));
@@ -56,10 +57,10 @@ if (existing) {
     rmSync(directory, { recursive: true, force: true });
   }
   let published;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 120; attempt++) {
     published = await lookup();
     if (published) break;
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await delay(10000);
   }
   if (!published) throw new Error("Published version is not visible in the registry");
   verify(published);
