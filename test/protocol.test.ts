@@ -12,6 +12,7 @@ import {
   RequestSchema,
   ResponseSchema,
   RexWorktreesResponseSchema,
+  RexNativeConfigResponseSchema,
   JjCommitIdSchema,
   JjChangeIdSchema,
   JjWorkspaceNameSchema,
@@ -109,6 +110,19 @@ it("every request and reply requires protocol version and destination identity",
     }),
   ).toThrow();
 });
+it("native settings have their own destination-local envelope, outside protocol v4", () => {
+  const native = JSON.stringify(JSON.stringify({ config: { roots: ["/destination"] }, directory: "/destination/rex" }));
+  expect(Schema.decodeUnknownSync(RexNativeConfigResponseSchema)(native)).toEqual({
+    config: { roots: ["/destination"] }, directory: "/destination/rex"
+  });
+  expect(() => Schema.decodeUnknownSync(RexNativeConfigResponseSchema)(
+    JSON.stringify(JSON.stringify({ config: { roots: {} }, directory: "/destination/rex" }))
+  )).toThrow();
+  expect(Schema.decodeUnknownSync(RequestSchema)({
+    version: 4, hostId: "destination", kind: "discover", config: { roots: ["/source"] }
+  })).toEqual({ version: 4, hostId: "destination", kind: "discover" });
+});
+
 it("discovery requires a destination-local clone root", () => {
   const response = { version: 4, hostId: "fixture-host", kind: "discover", sessions: [], clients: [], projects: [], roots: [], cloneRoot: "/home/fixture" };
   expect(Schema.decodeUnknownSync(ResponseSchema)(response)).toMatchObject(response);

@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Schema } from "effect";
-import { resolveWorktreeRoot } from "../src/config.ts";
+import { loadConfig, resolveWorktreeRoot } from "../src/config.ts";
 import {
   cloneRepository,
   cloneSource,
@@ -486,28 +486,34 @@ it.live(
       git(root, "clone", repo, clone);
       const linked = join(root, "linked checkout");
       git(repo, "worktree", "add", "-b", "linked", linked);
-      const configHome = join(root, "configuration");
-      const configDirectory = join(configHome, "rex-worktrees");
-      yield* Effect.promise(() => mkdir(configDirectory, { recursive: true }));
-      yield* Effect.promise(() =>
-        writeFile(
-          join(configDirectory, "config.json"),
-          JSON.stringify({
-            worktreeRoot: "../../global",
-            projects: [
-              { path: "../../linked checkout", worktreeRoot: "../../override" },
-            ],
-          }),
-        ),
-      );
-      const previous = process.env.XDG_CONFIG_HOME;
-      process.env.XDG_CONFIG_HOME = configHome;
+      const configDirectory = join(root, "configuration", "rex");
+      const previous = process.env.REX_WORKTREES_CONFIG;
+      process.env.REX_WORKTREES_CONFIG = JSON.stringify({
+        directory: configDirectory,
+        config: {
+          worktreeRoot: "../../global",
+          projects: [{ path: "../../linked checkout", worktreeRoot: "../../override" }],
+          roots: ["../../"],
+        }
+      });
       try {
         const override = join(root, "override");
         const global = join(root, "global", "another clone");
         expect(yield* resolveWorktreeRoot(linked)).toBe(override);
+        const config = yield* loadConfig;
+        expect((yield* discoverProjects(config.roots, config.projects)).map(project => project.path))
+          .toContain(repo);
         expect(yield* resolveWorktreeRoot(repo)).toBe(override);
         expect(yield* resolveWorktreeRoot(clone)).toBe(global);
+        process.env.REX_WORKTREES_CONFIG = JSON.stringify({
+          directory: configDirectory, config: { worktreeRoot: "../../source-worktrees" }
+        });
+        expect(yield* resolveWorktreeRoot(repo)).toBe(join(root, "source-worktrees", "repo with space"));
+        process.env.REX_WORKTREES_CONFIG = JSON.stringify({
+          directory: configDirectory,
+          config: { worktreeRoot: "../../global", projects: [{ path: "../../linked checkout", worktreeRoot: "../../override" }] }
+        });
+        expect(yield* resolveWorktreeRoot(repo)).toBe(override);
         const planned = yield* planWorktree(linked, "feature/nested", override);
         expect(planned.path).toBe(join(override, "feature", "nested"));
         const created = yield* createWorktree(linked, "feature/nested", {
@@ -535,8 +541,8 @@ it.live(
           join(clone, ".git"),
         );
       } finally {
-        if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
-        else process.env.XDG_CONFIG_HOME = previous;
+        if (previous === undefined) delete process.env.REX_WORKTREES_CONFIG;
+        else process.env.REX_WORKTREES_CONFIG = previous;
       }
     }).pipe(Effect.provide(BunServices.layer)),
 );
@@ -778,22 +784,32 @@ it.live("clone checkout task keeps pushed branches and rejects unpushed, collidi
       input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main", "published", "unpushed"] }, repo, session: { kind: "existing", id: sessionId }, name: "Task", branch, branchMode }
     });
     const repo = join(root, "cloned");
-    const prepared = yield* prepareCloneCheckout(makePlan(repo, "published", "existing"));
-    expect(prepared.repo.commonDir).toBe(join(repo, ".git"));
-    expect(git(prepared.cwd, "symbolic-ref", "--short", "HEAD").trim()).toBe("published");
-    expect(git(source, "branch", "--show-current").trim()).toBe("main");
-    const missing = join(root, "missing-branch");
-    expect((yield* Effect.flip(prepareCloneCheckout(makePlan(missing, "unpushed", "existing")))).message).toContain("not pushed");
-    expect((yield* repository(missing)).path).toBe(missing);
-    const collision = join(root, "collision");
-    yield* Effect.promise(() => mkdir(collision));
-    yield* Effect.promise(() => writeFile(join(collision, "keep"), "unchanged"));
-    yield* Effect.flip(prepareCloneCheckout(makePlan(collision, "published", "existing")));
-    expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
-    const link = join(root, "linked");
-    yield* Effect.promise(() => symlink(collision, link));
-    yield* Effect.flip(prepareCloneCheckout(makePlan(join(link, "nested"), "published", "existing")));
-    expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
+    const previousConfig = process.env.REX_WORKTREES_CONFIG;
+    process.env.REX_WORKTREES_CONFIG = JSON.stringify({
+      directory: root, config: { worktreeRoot: join(root, "destination-worktrees") }
+    });
+    try {
+      const prepared = yield* prepareCloneCheckout(makePlan(repo, "published", "existing"));
+      expect(prepared.repo.commonDir).toBe(join(repo, ".git"));
+      expect(prepared.cwd).toBe(join(root, "destination-worktrees", "cloned", "published"));
+      expect(git(prepared.cwd, "symbolic-ref", "--short", "HEAD").trim()).toBe("published");
+      expect(git(source, "branch", "--show-current").trim()).toBe("main");
+      const missing = join(root, "missing-branch");
+      expect((yield* Effect.flip(prepareCloneCheckout(makePlan(missing, "unpushed", "existing")))).message).toContain("not pushed");
+      expect((yield* repository(missing)).path).toBe(missing);
+      const collision = join(root, "collision");
+      yield* Effect.promise(() => mkdir(collision));
+      yield* Effect.promise(() => writeFile(join(collision, "keep"), "unchanged"));
+      yield* Effect.flip(prepareCloneCheckout(makePlan(collision, "published", "existing")));
+      expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
+      const link = join(root, "linked");
+      yield* Effect.promise(() => symlink(collision, link));
+      yield* Effect.flip(prepareCloneCheckout(makePlan(join(link, "nested"), "published", "existing")));
+      expect(yield* Effect.promise(() => readFile(join(collision, "keep"), "utf8"))).toBe("unchanged");
+    } finally {
+      if (previousConfig === undefined) delete process.env.REX_WORKTREES_CONFIG;
+      else process.env.REX_WORKTREES_CONFIG = previousConfig;
+    }
   }).pipe(Effect.provide(BunServices.layer))
 );
 
@@ -822,15 +838,22 @@ it.live("existing clone checkout pins repository identity and default origin bas
       vcs: "git", hostId, repo, existing: true, commonDir: original.commonDir, base, label: "Open existing repository",
       input: { vcs: "git", source: { vcs: "git", url: bare, sourceHostId: hostId, branches: ["main"] }, repo, session: { kind: "existing", id: sessionId }, name: "Task", branch: "new-from-default", branchMode: "create" }
     };
-    const prepared = yield* prepareCloneCheckout(plan);
-    expect(git(prepared.cwd, "rev-parse", "HEAD").trim()).toBe(base);
-    expect(git(repo, "rev-parse", "HEAD").trim()).toBe(feature);
-    expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "main" } }))).message).toContain("already exists");
-    const displaced = join(root, "original");
-    yield* Effect.promise(() => rename(repo, displaced));
-    git(root, "clone", `--separate-git-dir=${join(root, "replacement-metadata")}`, bare, repo);
-    expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "replacement-test" } }))).message).toContain("identity changed");
-    expect(git(repo, "branch", "--list", "replacement-test")).toBe("");
+    const previousConfig = process.env.REX_WORKTREES_CONFIG;
+    process.env.REX_WORKTREES_CONFIG = JSON.stringify({ directory: root, config: {} });
+    try {
+      const prepared = yield* prepareCloneCheckout(plan);
+      expect(git(prepared.cwd, "rev-parse", "HEAD").trim()).toBe(base);
+      expect(git(repo, "rev-parse", "HEAD").trim()).toBe(feature);
+      expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "main" } }))).message).toContain("already exists");
+      const displaced = join(root, "original");
+      yield* Effect.promise(() => rename(repo, displaced));
+      git(root, "clone", `--separate-git-dir=${join(root, "replacement-metadata")}`, bare, repo);
+      expect((yield* Effect.flip(prepareCloneCheckout({ ...plan, input: { ...plan.input, branch: "replacement-test" } }))).message).toContain("identity changed");
+      expect(git(repo, "branch", "--list", "replacement-test")).toBe("");
+    } finally {
+      if (previousConfig === undefined) delete process.env.REX_WORKTREES_CONFIG;
+      else process.env.REX_WORKTREES_CONFIG = previousConfig;
+    }
   }).pipe(Effect.provide(BunServices.layer))
 );
 
@@ -841,11 +864,12 @@ it.live("JJ clone checkout creates a named workspace at a source-resolved publis
     git(root, "init", "--bare", bare);
     git(source, "push", bare, "main");
     git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
-    const previous = { JJ_CONFIG: process.env.JJ_CONFIG, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    const previous = { JJ_CONFIG: process.env.JJ_CONFIG, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, REX_WORKTREES_CONFIG: process.env.REX_WORKTREES_CONFIG };
     try {
       process.env.HOME = join(root, "jj-home");
       process.env.XDG_CONFIG_HOME = join(root, "jj-config");
       process.env.JJ_CONFIG = join(root, "jj-config.toml");
+      process.env.REX_WORKTREES_CONFIG = JSON.stringify({ directory: root, config: {} });
       yield* Effect.promise(() => mkdir(process.env.HOME!));
       yield* Effect.promise(() => writeFile(process.env.JJ_CONFIG!, '[user]\nname = "Rex Tests"\nemail = "rex@example.test"\n'));
       const sourceRepo = join(root, "jj-source");
@@ -873,7 +897,7 @@ it.live("JJ clone checkout creates a named workspace at a source-resolved publis
       const repeated = yield* Effect.exit(prepareCloneCheckout(plan));
       expect(repeated).toMatchObject({ _tag: "Failure" });
     } finally {
-      for (const key of ["JJ_CONFIG", "HOME", "XDG_CONFIG_HOME"] as const) {
+      for (const key of ["JJ_CONFIG", "HOME", "XDG_CONFIG_HOME", "REX_WORKTREES_CONFIG"] as const) {
         if (previous[key] === undefined) delete process.env[key];
         else process.env[key] = previous[key];
       }

@@ -76,6 +76,7 @@ export const ConfigSchema = Schema.Struct({
   worktreeRoot: Schema.optional(Schema.String)
 })
 export type Config = typeof ConfigSchema.Type
+export const NativeConfigSchema = Schema.Struct({ config: ConfigSchema, directory: Schema.String })
 export type ResolvedConfig = {
   readonly roots: readonly string[]
   readonly projects: readonly string[]
@@ -91,6 +92,7 @@ export type Install = {
   readonly managedBin?: string | undefined
   readonly pathEnv?: string | undefined
   readonly allowLinkedConfig?: boolean | undefined
+  readonly legacyConfigPath?: string | undefined
 }
 export const AssociationSchema = Schema.Struct({
   vcs: VcsSchema, hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
@@ -255,6 +257,7 @@ export const ResponseSchema = Schema.Union([
 export type Response = typeof ResponseSchema.Type
 // Native Lua actions return an opaque JSON string inside Rex's JSON response.
 export const RexWorktreesResponseSchema = Schema.fromJsonString(Schema.fromJsonString(ResponseSchema))
+export const RexNativeConfigResponseSchema = Schema.fromJsonString(Schema.fromJsonString(NativeConfigSchema))
 
 export const PopupOriginSchema = Schema.Struct({ sessionId: Schema.optional(SessionIdSchema), blockId: Schema.optional(BlockIdSchema), clientId: Schema.optional(ClientIdSchema) })
 export type PopupOrigin = typeof PopupOriginSchema.Type

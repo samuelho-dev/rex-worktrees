@@ -2,6 +2,8 @@
 
 A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for opening and creating **Git worktrees** and **Jujutsu (JJ) workspaces**. Pick a project, machine, checkout, and session; it opens a shell there. No agent or model required.
 
+<img width="693" height="236" alt="image" src="https://github.com/user-attachments/assets/fadd8e3c-30fc-4f94-98ca-41132a23ff36" />
+
 ## Install
 
 Requires Rex and its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. Standalone builds support Apple Silicon macOS 15+ and Linux x64; no Bun runtime is needed.
@@ -57,16 +59,16 @@ rex.bind("ctrl+alt+w", "worktrees_open")
 
 ### Add projects
 
-Without configuration, the current pane's repository is suggested. To list more projects, create `~/.config/rex-worktrees/config.json` (or `$XDG_CONFIG_HOME/rex-worktrees/config.json`):
+Without configuration, the current pane's repository is suggested. To list more projects, edit the existing registration in your Rex `init.lua`, then run `rex config reload`:
 
-```json
-{
-  "projects": ["/absolute/path/to/project"],
-  "roots": ["/absolute/path/to/projects"]
-}
+```lua
+require("rex-worktrees").setup({
+  projects = { "/absolute/path/to/project" },
+  roots = { "/absolute/path/to/projects" },
+})
 ```
 
-Both settings are optional. `projects` lists repositories explicitly; `roots` discovers them up to two directory levels deep. New checkouts default to a sibling `<repository>.worktrees/<name>` directory. Set `worktreeRoot` globally or on a project object (`{"path": "…", "worktreeRoot": "…"}`) to override it.
+Both settings are optional. `projects` lists repositories explicitly; `roots` discovers them up to two directory levels deep. New checkouts default to a sibling `<repository>.worktrees/<name>` directory. Set `worktreeRoot` globally or on a project object (`{ path = "…", worktreeRoot = "…" }`) to override it. Setup preserves these settings on upgrades and migrates the former JSON configuration.
 
 ### Other machines
 

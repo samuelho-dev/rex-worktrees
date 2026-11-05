@@ -114,9 +114,14 @@ export const originDirectory = Effect.fnUntraced(function*(sessionId: SessionId,
 }, withLocalIdentity);
 
 
-// Rex's macOS login wrapper resets PATH before starting a direct command.
-const commandWithPath = (command: readonly string[]) => process.env.PATH
-  ? ["/usr/bin/env", `PATH=${process.env.PATH}`, ...command] : command;
+// Rex's macOS login wrapper resets PATH and drops injected settings before starting a direct command.
+const commandWithPath = (command: readonly string[]) => {
+  const env = [
+    ...(process.env.PATH ? [`PATH=${process.env.PATH}`] : []),
+    ...(process.env.REX_WORKTREES_CONFIG !== undefined ? [`REX_WORKTREES_CONFIG=${process.env.REX_WORKTREES_CONFIG}`] : [])
+  ];
+  return env.length ? ["/usr/bin/env", ...env, ...command] : command;
+};
 
 export const createTab = Effect.fnUntraced(function*(sessionId: SessionId, name: string, cwd: string, command: readonly string[]) {
   const result = yield* parse(RexCreatedSchema, yield* rex(["window", "new", "-s", sessionId, name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...commandWithPath(command)]));
