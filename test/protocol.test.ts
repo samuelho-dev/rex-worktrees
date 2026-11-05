@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
@@ -282,6 +282,22 @@ it.live("a real missing destination survives host-request and Rex's nested respo
       const reply = yield* hostRequest(JSON.stringify(request), ["/usr/bin/false"]);
       expect(reply).toEqual({ version: 4, hostId: available.success.id, kind: "project-missing", path });
       expect(Schema.decodeUnknownSync(RexWorktreesResponseSchema)(JSON.stringify(JSON.stringify(reply)))).toEqual(reply);
+      const config = join(root, "rex-worktrees");
+      yield* Effect.promise(() => mkdir(config));
+      yield* Effect.promise(() => writeFile(join(config, "config.json"), "invalid project configuration"));
+      const previousConfig = process.env.XDG_CONFIG_HOME;
+      try {
+        process.env.XDG_CONFIG_HOME = root;
+        const sessionsRequest = { version: 4, hostId: available.success.id, kind: "sessions" };
+        const sessions = yield* hostRequest(JSON.stringify(sessionsRequest), ["/usr/bin/false"]);
+        expect(sessions.kind).toBe("sessions");
+        expect(Schema.decodeUnknownSync(RexWorktreesResponseSchema)(JSON.stringify(JSON.stringify(sessions)))).toEqual(sessions);
+        const wrongHost = yield* Effect.flip(hostRequest(JSON.stringify({ ...sessionsRequest, hostId: "wrong-host" }), ["/usr/bin/false"]));
+        expect(Schema.is(AppError)(wrongHost) && wrongHost.message).toContain("Wrong Rex host");
+      } finally {
+        if (previousConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfig;
+      }
     } finally {
       yield* Effect.promise(() => rm(root, { recursive: true, force: true }));
     }

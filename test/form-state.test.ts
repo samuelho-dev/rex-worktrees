@@ -226,10 +226,32 @@ it("JJ clone uses source-resolved full commit ID or the cloned default, not sour
   expect(cloneInputFor(draft)).not.toHaveProperty("revision");
   const pinned = selectRevision({ ...draft, worktreeName: "topic" }, base);
   expect(cloneInputFor(pinned)).toMatchObject({
-    vcs: "jj", worktreeName: "topic", revision: revision.commitId, source: { revisions: [base] }
+    vcs: "jj", worktreeName: "topic", revision: revision.commitId
   });
   const pinnedInput = cloneInputFor(pinned);
   if (pinnedInput?.vcs !== "jj") throw new Error("Expected JJ clone input");
   expect(pinnedInput.revision).not.toBe(base.expression);
   expect(changeProjectChoice(pinned, { name: "beta" }).destination).toBeUndefined();
+});
+
+it("JJ clone launch stays within Rex's control limit with a large source revision inventory", () => {
+  const large = { ...mainline, label: "Commit body ".repeat(4000), revision: { ...mainlineRevision, description: "Commit body ".repeat(4000) } };
+  const draft: Draft = {
+    ...jjDraft(), project: undefined,
+    clone: {
+      vcs: "jj", url: "https://example.com/alpha.git", sourceHostId: local.hostId,
+      revisions: [large, base], revision: large.revision, repo: "/target/alpha"
+    }
+  };
+  for (const candidate of [draft, selectRevision(draft, base)]) {
+    const input = cloneInputFor(candidate);
+    if (input?.vcs !== "jj") throw new Error("Expected JJ clone input");
+    const payload = JSON.stringify({ request: JSON.stringify({
+      version: 4, hostId: local.hostId, kind: "clone-launch", input,
+      reviewed: { vcs: "jj", hostId: local.hostId, repo: input.repo, existing: false, label: "Clone & Open", input }
+    }) });
+    expect(Buffer.byteLength(payload)).toBeLessThan(65536);
+    if (input.revision) expect(input.source.revision?.commitId).toBe(revision.commitId);
+    else expect(input.source.revision).toBeUndefined();
+  }
 });

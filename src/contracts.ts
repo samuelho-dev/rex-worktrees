@@ -1,7 +1,4 @@
 import { Schema } from "effect"
-import type { Effect, FileSystem, Path } from "effect"
-import type { ChildProcessSpawner } from "effect/process"
-import type { Prompt } from "effect/cli"
 
 export class AppError extends Schema.TaggedError<AppError>()("AppError", {
   message: Schema.String,
@@ -63,15 +60,13 @@ export const JjWorktreeSchema = Schema.Struct({
 export type JjWorktree = typeof JjWorktreeSchema.Type
 export const WorktreeSchema = Schema.Union([GitWorktreeSchema, JjWorktreeSchema])
 export type Worktree = typeof WorktreeSchema.Type
-export const WorktreePlanSchema = Schema.Struct({ repository: GitRepositorySchema, path: Schema.String, branch: Schema.String, existing: Schema.Boolean })
-export type WorktreePlan = typeof WorktreePlanSchema.Type
-export const CreateWorktreeOptionsSchema = Schema.Struct({
-  startPoint: Schema.optional(Schema.String), attachOnly: Schema.optional(Schema.Boolean),
-  worktreeRoot: Schema.optional(Schema.String), worktreeName: Schema.optional(Schema.String)
-})
-export type CreateWorktreeOptions = typeof CreateWorktreeOptionsSchema.Type
-export const EnvironmentSchema = Schema.Record(Schema.String, Schema.String)
-export type Environment = Record<string, typeof EnvironmentSchema.Type[string]>
+export type CreateWorktreeOptions = {
+  readonly startPoint?: string | undefined
+  readonly attachOnly?: boolean | undefined
+  readonly worktreeRoot?: string | undefined
+  readonly worktreeName?: string | undefined
+}
+export type Environment = Record<string, string>
 
 export const ConfigSchema = Schema.Struct({
   roots: Schema.optional(Schema.Array(Schema.String)),
@@ -81,13 +76,22 @@ export const ConfigSchema = Schema.Struct({
   worktreeRoot: Schema.optional(Schema.String)
 })
 export type Config = typeof ConfigSchema.Type
-export const ResolvedConfigSchema = Schema.Struct({
-  roots: Schema.Array(Schema.String), projects: Schema.Array(Schema.String), worktreeRoot: Schema.UndefinedOr(Schema.String),
-  projectRoots: Schema.Array(Schema.Struct({ path: Schema.String, worktreeRoot: Schema.String }))
-})
-export type ResolvedConfig = typeof ResolvedConfigSchema.Type
-export const InstallSchema = Schema.Struct({ source: Schema.String, home: Schema.String, configPath: Schema.String, lua: Schema.String, rexBinDir: Schema.String, managedBin: Schema.optional(Schema.String), pathEnv: Schema.optional(Schema.String), allowLinkedConfig: Schema.optional(Schema.Boolean) })
-export type Install = typeof InstallSchema.Type
+export type ResolvedConfig = {
+  readonly roots: readonly string[]
+  readonly projects: readonly string[]
+  readonly worktreeRoot: string | undefined
+  readonly projectRoots: readonly { readonly path: string; readonly worktreeRoot: string }[]
+}
+export type Install = {
+  readonly source: string
+  readonly home: string
+  readonly configPath: string
+  readonly lua: string
+  readonly rexBinDir: string
+  readonly managedBin?: string | undefined
+  readonly pathEnv?: string | undefined
+  readonly allowLinkedConfig?: boolean | undefined
+}
 export const AssociationSchema = Schema.Struct({
   vcs: VcsSchema, hostId: ServerHostIdSchema, commonDir: Schema.String, path: Schema.String,
   sessionId: SessionIdSchema, windowId: WindowIdSchema, blockId: BlockIdSchema
@@ -223,6 +227,7 @@ export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(4),
 export type RequestIdentity = typeof RequestIdentitySchema.Type
 export const RequestSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), context: Schema.optional(Schema.String) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("sessions") }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), repo: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), path: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), repo: Schema.String }),
@@ -236,6 +241,7 @@ export type Request = typeof RequestSchema.Type
 export type RequestBody<R = Request> = R extends Request ? Omit<R, keyof RequestIdentity> : never
 export const ResponseSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), roots: Schema.optional(Schema.Array(Schema.String)), cloneRoot: Schema.String, checkout: Schema.optional(RepositorySchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("sessions"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project-missing"), path: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), source: CloneSourceSchema }),
@@ -252,10 +258,6 @@ export const RexWorktreesResponseSchema = Schema.fromJsonString(Schema.fromJsonS
 
 export const PopupOriginSchema = Schema.Struct({ sessionId: Schema.optional(SessionIdSchema), blockId: Schema.optional(BlockIdSchema), clientId: Schema.optional(ClientIdSchema) })
 export type PopupOrigin = typeof PopupOriginSchema.Type
-export const PopupSizeSchema = Schema.Struct({ columns: Schema.Number, rows: Schema.Number })
-export type PopupSize = typeof PopupSizeSchema.Type
-export const PopupBoundsSchema = Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number])
-export type PopupBounds = typeof PopupBoundsSchema.Type
 export const RexIdentitySchema = Schema.Struct({ host_id: ServerHostIdSchema, endpoint: Schema.String, principal: Schema.Struct({ transport: Schema.String }) })
 export const RexSessionsSchema = Schema.Struct({ sessions: Schema.Array(Schema.Struct({ session_id: SessionIdSchema, label: Schema.String })) })
 export const RexSessionCreatedSchema = Schema.Struct({ session_id: SessionIdSchema })
@@ -274,13 +276,10 @@ export const RexWindowsSchema = Schema.Struct({
 export const RexViewSchema = Schema.Struct({
   active_window_id: Schema.NullOr(WindowIdSchema), windows: Schema.Array(Schema.Struct({
     window_id: WindowIdSchema, layers: Schema.Array(Schema.Struct({
-      layer_id: Schema.NullOr(LayerIdSchema), kind: Schema.String, bounds: Schema.optional(Schema.NullOr(PopupBoundsSchema)),
       blocks: Schema.Array(Schema.Struct({ block_id: BlockIdSchema, owner: Schema.optional(Schema.NullOr(ClientIdSchema)) }))
     }))
   }))
 })
-export const RexResizedSchema = Schema.Struct({ revision: Schema.Number })
-export const RexTerminalSizeSchema = Schema.Struct({ ...PopupSizeSchema.fields, owner: Schema.NullOr(ClientIdSchema) })
 export const RexCreatedSchema = Schema.Struct({ window_id: Schema.optional(WindowIdSchema), block_ids: Schema.Array(BlockIdSchema) })
 export const RexLayerSchema = Schema.Struct({ layer_id: Schema.NullOr(LayerIdSchema), block_ids: Schema.NullOr(Schema.Array(Schema.NullOr(BlockIdSchema))), revision: Schema.Number })
 export const RexDirectorySchema = Schema.Struct({ pwd: Schema.optional(Schema.String) })
@@ -325,7 +324,6 @@ export type FormView = {
   readonly submitDisabled?: boolean
   readonly notice?: string
   readonly error?: string
-  fitWarning?: string
 }
 export type Color = "cyan" | "amber" | "muted" | "red" | "bold"
 export type NoticeTone = "warning" | "error" | "info"
@@ -357,6 +355,3 @@ export type Draft = {
 export type InputChoice<A> = { readonly value: A; readonly title: string; readonly description?: string; readonly selected?: boolean }
 export type InputChoiceResult<A> = { readonly kind: "selected"; readonly value: A } | { readonly kind: "typed"; readonly text: string }
 export type InputChoiceOptions<A> = { readonly message: string; readonly choices: readonly InputChoice<A>[]; readonly selectionOnly?: boolean; readonly selected?: number }
-export type PromptAction<State, Output> = Prompt.Action<State, Output>
-export type PopupSizer = (preferred: PopupSize, observed: PopupSize) => Effect.Effect<string | undefined>
-export type GitServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner

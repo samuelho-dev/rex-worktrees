@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const ui = pathToFileURL(resolve(root, "src/ui.ts")).href;
 const client = pathToFileURL(resolve(root, "src/client.ts")).href;
-const rex = pathToFileURL(resolve(root, "src/rex.ts")).href;
 const effect = pathToFileURL(
   resolve(root, "node_modules/effect/dist/Effect.js"),
 ).href;
@@ -40,7 +39,7 @@ const waitFor = (
 };
 
 async function withPopup(
-  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "switch-pending" | "changed" | "redirect" | "warning" | "clone-warning" | "clone-changed" | "jj" | "detached" | "long",
+  kind: "pending" | "failure" | "edit" | "session" | "collision" | "permission" | "unsafe" | "connect" | "switch-pending" | "redirect" | "warning" | "clone-warning" | "clone-changed" | "clone-failure" | "jj" | "detached" | "long",
   run: (pty: {
     output: () => string;
     waitForText: (text: string | RegExp, from?: number) => Promise<void>;
@@ -66,6 +65,7 @@ async function withPopup(
     import * as BunRuntime from ${JSON.stringify(runtime)};
     import * as BunServices from ${JSON.stringify(services)};
     import { mock } from "bun:test";
+    import { run } from ${JSON.stringify(pathToFileURL(resolve(root, "src/process.ts")).href)};
     ${kind !== "pending" && kind !== "failure" ? `
       const scenario = ${JSON.stringify(kind)};
       const { AppError } = await import(${JSON.stringify(pathToFileURL(resolve(root, "src/contracts.ts")).href)});
@@ -82,8 +82,6 @@ async function withPopup(
         { expression: "trunk()", label: "trunk()", revision: { commitId: "a".repeat(40), changeId: "k".repeat(32), description: "mainline" } },
         { expression: "candidate", label: "candidate", revision: { commitId: "b".repeat(40), changeId: "m".repeat(32), description: "alternate" } }
       ] : [];
-      let reviewCount = 0;
-      let cloneReviewCount = 0;
       const connect = machine => scenario === "connect" && machine.key === "remote"
         ? Effect.fail(new AppError({ message: "Remote helper unavailable; install and reload Rex" }))
         : Effect.succeed(machine);
@@ -94,7 +92,7 @@ async function withPopup(
       mock.module(${JSON.stringify(client)}, () => ({
         listMachines: Effect.succeed(scenario === "edit" || scenario === "unsafe" ? [host] : [host, remote]),
         connectMachine: connect,
-        discover,
+        inspectSessions: machine => discover(machine),
         connectAndDiscover: machine => Effect.gen(function*() {
           if (scenario === "switch-pending" && !machine.local) yield* Effect.never;
           const connected = yield* connect(machine);
@@ -115,27 +113,26 @@ async function withPopup(
               ? "Cannot write clone destination parent: " + input.repo
               : "Clone destination already exists and is not a repository: " + input.repo }))
             : Effect.succeed({ vcs: "git", input, hostId: remote.hostId,
-              repo: scenario === "clone-changed" && ++cloneReviewCount > 1 ? "/safe/alpha.changed" : input.repo,
+              repo: scenario === "clone-changed" ? "/safe/alpha.changed" : input.repo,
               existing: false, label: "Clone & Open", detail: "Destination: " + input.repo,
               ...(scenario === "clone-warning" || scenario === "clone-changed" ? { warning: "Multiple Rex apps are connected" } : {}) });
         },
-        submitClone: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED " + JSON.stringify(input.session) + " " + plan.repo + "\\n"); return { sessionId: "session-local", repo: plan.repo }; }),
+        submitClone: (_, __, input, plan) => scenario === "clone-failure"
+          ? run(process.execPath, ["-e", 'console.error("Destination request rejected"); process.exit(4)', "request-body-".repeat(2000)])
+          : Effect.sync(() => { process.stderr.write("CLONE_LAUNCHED " + JSON.stringify(input.session) + " " + plan.repo + "\\n"); return { sessionId: "session-local", repo: plan.repo }; }),
         review: (_, __, input) => Effect.sync(() => {
           process.stderr.write("REVIEW_CALLED " + JSON.stringify(input) + "\\n");
-          const path = scenario === "redirect" ? "/projects/other" :
-            scenario === "changed" && ++reviewCount > 1 ? "/projects/alpha.changed" : project.path;
+          const path = scenario === "redirect" ? "/projects/other" : project.path;
           return { vcs: input.vcs, input, hostId: host.hostId,
             path, action: "new-tab", checkout: input.path ? "existing" : "create",
             ...(input.vcs === "git" ? { branch: input.branch ?? "main" } : {}),
             nameRole: "tab", name: input.name,
             label: input.path ? "Open tab" : input.vcs === "jj" ? "Create workspace & open" : "Create worktree & open",
-            ...(scenario === "warning" || scenario === "changed" ? { warning: "Multiple Rex apps are connected" } : {}) };
+            ...(scenario === "warning" ? { warning: "Multiple Rex apps are connected" } : {}) };
         }),
         submit: (_, __, input, plan) => Effect.sync(() => { process.stderr.write("LAUNCH_CALLED " + JSON.stringify(input.session) + " " + plan.path + "\\n");
           return { sessionId: input.session.kind === "new" ? "created-id" : input.session.id, path: plan.path, action: "new-tab", pending: false }; })
       }));
-      const originalRex = await import(${JSON.stringify(rex)});
-      mock.module(${JSON.stringify(rex)}, () => ({ ...originalRex, makePopupSizer: Effect.succeed(() => Effect.succeed(undefined)) }));
     ` : ""}
     // Load after module mocks so this PTY drives the real popup against recorded client calls.
     const { popup } = await import(${JSON.stringify(ui)});
@@ -155,7 +152,7 @@ async function withPopup(
     env,
     terminal: {
       cols: kind === "long" ? 60 : 96,
-      rows: kind === "long" ? 18 : kind === "edit" ? 16 : 24,
+      rows: kind === "long" ? 18 : kind === "edit" || kind === "connect" ? 16 : 24,
       data: (_, bytes) => {
         output += new TextDecoder().decode(bytes);
         for (const listener of listeners) listener();
@@ -281,8 +278,7 @@ for (const [name, input, frame, selection] of [
 ] as const) {
   it(name, async () => {
     await withPopup("session", async (pty) => {
-      await pty.waitForText(/CHECKOUT\s+alpha/);
-      await pty.waitForText("Esc close");
+      await pty.waitForForm(/CHECKOUT\s+alpha/);
       pty.write("\t\t\t\r");
       await pty.waitForText("Session (select existing or type new name)");
       pty.write(input);
@@ -300,8 +296,7 @@ for (const [name, input, frame, selection] of [
 
 it("flat ordinary form edits Mode directly without launching from its editor", async () => {
   await withPopup("edit", async (pty) => {
-    await pty.waitForText(/CHECKOUT\s+alpha/);
-    await pty.waitForText("Esc close");
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
     expect(pty.output()).toContain("MODE");
     expect(pty.output()).not.toContain("OPTIONS");
     pty.write("\t\t\t\t\r");
@@ -333,8 +328,7 @@ it("typing an occupied Git branch opens its exact existing checkout", async () =
 
 it("typed Git branch shows an independent directory row and launches on one submit", async () => {
   await withPopup("edit", async (pty) => {
-    await pty.waitForText(/CHECKOUT\s+alpha/);
-    await pty.waitForText("Esc close");
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
     expect(pty.output()).toContain("MODE");
     expect(pty.output()).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("  DIRECTORY  ");
@@ -342,11 +336,10 @@ it("typed Git branch shows an independent directory row and launches on one subm
     await pty.waitForText("Checkout (");
     const beforeBranch = pty.output().length;
     pty.write("feature/free\r");
-    await pty.waitForText("Esc close", beforeBranch);
+    await pty.waitForForm(/CHECKOUT\s+feature\/free/, beforeBranch);
     const branchFrame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
     expect(branchFrame).toMatch(/CHECKOUT\s+feature\/free/);
     expect(branchFrame).toMatch(/DIRECTORY\s+Default/);
-    expect(branchFrame).toContain("MODE");
     expect(branchFrame).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\t\t\r");
@@ -363,58 +356,29 @@ it("typed Git branch shows an independent directory row and launches on one subm
   });
 }, 8000);
 
-it("a structured review warning waits for another explicit submit", async () => {
+it("a review warning launches on the first submit", async () => {
   await withPopup("warning", async (pty) => {
     await pty.waitForForm(/CHECKOUT\s+alpha/);
     pty.write("\x13");
-    const reviewed = await pty.waitForForm("Multiple Rex apps are connected");
-    expect(reviewed).toContain("Review this action");
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x13");
     await pty.waitForText("Opened with warning");
+    expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
     expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
     pty.write("\r");
     expect(await pty.exited).toBe(0);
   });
 }, 8000);
 
-it("a changed reviewed target is displayed and needs another explicit confirmation", async () => {
-  await withPopup("changed", async (pty) => {
-    await pty.waitForForm(/CHECKOUT\s+alpha/);
-    pty.write("\t\t\r");
-    await pty.waitForText("Checkout (");
-    const beforeBranch = pty.output().length;
-    pty.write("feature/free\r");
-    await pty.waitForForm(/CHECKOUT\s+feature\/free/, beforeBranch);
-    const beforeReview = pty.output().length;
-    pty.write("\x13");
-    await pty.waitForForm("Multiple Rex apps are connected", beforeReview);
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    const beforeChange = pty.output().length;
-    pty.write("\x13");
-    const displayed = await pty.waitForForm("Destination or Rex target changed", beforeChange);
-    expect(displayed).toContain("Destination or Rex target changed");
-    expect(displayed).toContain("Destination: /projects/alpha.changed");
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x13");
-    await pty.waitForText("Opened with warning");
-    expect(pty.output()).toContain("LAUNCH_CALLED {\"kind\":\"existing\",\"id\":\"session-local\"} /projects/alpha.changed");
-    pty.write("\r");
-    expect(await pty.exited).toBe(0);
-  });
-}, 8000);
-
-it("a first review targeting another existing checkout waits for the changed path", async () => {
+it("a redirected existing checkout stays blocked on repeated submit", async () => {
   await withPopup("redirect", async (pty) => {
-    const form = await pty.waitForForm(/CHECKOUT\s+alpha/);
-    expect(form).toContain("/projects/alpha");
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
     pty.write("\x13");
-    const changed = await pty.waitForForm("Destination or Rex target changed");
-    expect(changed).toContain("Destination: /projects/other");
+    await pty.waitForForm("Destination changed; select the checkout again:");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
     pty.write("\x13");
+    // Cancel after the retry so the final output includes everything processed before exit.
+    pty.write("\x1b");
     expect(await pty.exited).toBe(0);
-    expect(pty.output()).toContain('LAUNCH_CALLED {"kind":"existing","id":"session-local"} /projects/other');
+    expect(pty.output()).not.toContain("LAUNCH_CALLED");
   });
 }, 8000);
 
@@ -450,7 +414,6 @@ it("a detached clone exposes required Branch in the flat form", async () => {
     pty.write("\x1b[B\r");
     const cloneFrame = await pty.waitForForm(/CLONE TO\s+\/clones\/alpha/);
     expect(cloneFrame).toMatch(/BRANCH\s+Select or type branch/);
-    expect(cloneFrame).toMatch(/DIRECTORY\s+Default/);
     expect(cloneFrame).not.toContain("MODE");
     expect(cloneFrame).not.toContain("OPTIONS");
     pty.write("\t\r");
@@ -470,14 +433,13 @@ it("a detached clone exposes required Branch in the flat form", async () => {
   });
 }, 8000);
 
-it("a clamped long checkout path needs review before opening", async () => {
+it("a clamped long checkout path launches on the first submit", async () => {
   await withPopup("long", async (pty) => {
     await pty.waitForForm(/CHECKOUT\s+alpha/);
     pty.write("\x13");
-    await pty.waitForText("REVIEW_CALLED");
-    expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\x1b");
     expect(await pty.exited).toBe(0);
+    expect(pty.output().match(/REVIEW_CALLED/g)).toHaveLength(1);
+    expect(pty.output().match(/LAUNCH_CALLED/g)).toHaveLength(1);
   });
 }, 8000);
 
@@ -522,7 +484,7 @@ it("clone path editor cannot launch; optional checkout name remains independent"
 }, 8000);
 
 for (const scenario of ["clone-warning", "clone-changed"] as const) {
-  it(`${scenario} requires confirmation of the reviewed clone target`, async () => {
+  it(`${scenario} ${scenario === "clone-warning" ? "launches on first submit" : "stays blocked on retry"}`, async () => {
     await withPopup(scenario, async (pty) => {
       await pty.waitForForm(/CHECKOUT\s+alpha/);
       pty.write("\t\r");
@@ -535,23 +497,46 @@ for (const scenario of ["clone-warning", "clone-changed"] as const) {
       pty.write("/safe/alpha\r");
       await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
       pty.write("\x13");
-      const reviewed = await pty.waitForForm("Multiple Rex apps are connected");
-      expect(reviewed).toContain("Review this action");
-      expect(pty.output()).not.toContain("CLONE_LAUNCHED");
       if (scenario === "clone-changed") {
-        const beforeChange = pty.output().length;
-        pty.write("\x13");
-        const changed = await pty.waitForForm("Clone destination or Rex target changed", beforeChange);
-        expect(changed).toContain("/safe/alpha.changed");
+        await pty.waitForForm("Clone destination changed; edit the destination:");
         expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+        pty.write("\x13\x1b");
+        expect(await pty.exited).toBe(0);
+        expect(pty.output()).not.toContain("CLONE_LAUNCHED");
+      } else {
+        expect(await pty.exited).toBe(0);
+        expect(pty.output().match(/REVIEW_CLONE/g)).toHaveLength(1);
+        expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
+        expect(pty.output()).toContain('CLONE_LAUNCHED {"kind":"existing","id":"session-local"} /safe/alpha');
       }
-      pty.write("\x13");
-      expect(await pty.exited).toBe(0);
-      expect(pty.output().match(/CLONE_LAUNCHED/g)).toHaveLength(1);
-      expect(pty.output()).toContain(`CLONE_LAUNCHED {"kind":"existing","id":"session-local"} ${scenario === "clone-changed" ? "/safe/alpha.changed" : "/safe/alpha"}`);
     });
   }, 8000);
 }
+
+it("clone launch errors show subprocess diagnostics instead of hiding them behind request arguments", async () => {
+  await withPopup("clone-failure", async (pty) => {
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
+    pty.write("\t\r");
+    await pty.waitForEditor("Execution machine");
+    pty.write("\x1b[B\r");
+    await pty.waitForForm(/CLONE TO\s+\/clones\/alpha/);
+    pty.write("\t\r");
+    await pty.waitForEditor("Clone to (absolute destination");
+    const beforeDestination = pty.output().length;
+    pty.write("/safe/alpha\r");
+    await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
+    pty.write("\x13");
+    await pty.waitForText("Clone needs inspection");
+    const frame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
+    expect(frame).toContain("Destination request rejected");
+    expect(frame).toContain("exited 4");
+    expect(frame).toContain("Destination: /safe/alpha");
+    expect(frame).not.toContain("request-body-");
+    expect(pty.exitCode()).toBeNull();
+    pty.write("\r");
+    expect(await pty.exited).not.toBe(0);
+  });
+}, 8000);
 
 for (const [kind, diagnostic] of [
   ["collision", "Clone destination already exists and is not a repository"],
@@ -620,10 +605,37 @@ it("switch paints the selected machine with no actionable old destination while 
   });
 }, 8000);
 
+it("startup, editor, and error keep the same 16-row frame", async () => {
+  await withPopup("connect", async (pty) => {
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
+    const firstPaint = pty.output().split("\x1b[H\x1b[2J").find(frame => frame.includes("Discovering projects"))!;
+    const startup = firstPaint.slice(0, firstPaint.indexOf("┘") + 1);
+    pty.write("\t\r");
+    const editor = await pty.waitForEditor("Execution machine");
+    const before = pty.output().length;
+    pty.write("\x1b[B\r");
+    const error = await pty.waitForForm("Remote helper unavailable; install and reload Rex", before);
+    const lines = (frame: string) => Bun.stripANSI(frame).replace(/\r/g, "").split("\n");
+    const frames = [startup, editor, error].map(lines);
+    for (const frame of frames) {
+      expect(frame).toHaveLength(16);
+      expect(frame[0]).toMatch(/^┌.*┐$/);
+      expect(frame[15]).toMatch(/^└.*┘$/);
+      expect(frame[14]).toContain(frame === frames[1] ? "Esc back" : "Tab next");
+    }
+    for (const label of ["PROJECT", "MACHINE"]) {
+      const positions = frames.map((frame) => frame.findIndex((line) => line.includes(label)));
+      expect(positions[0]).toBeGreaterThan(0);
+      expect(positions).toEqual([positions[0], positions[0], positions[0]]);
+    }
+    pty.write("\x1b");
+    expect(await pty.exited).toBe(0);
+  });
+}, 8000);
+
 it("machine field acceptance preserves the new connection error", async () => {
   await withPopup("connect", async (pty) => {
-    await pty.waitForText(/CHECKOUT\s+alpha/);
-    await pty.waitForText("Esc close");
+    await pty.waitForForm(/CHECKOUT\s+alpha/);
     pty.write("\t\r");
     await pty.waitForText("Execution machine");
     const before = pty.output().length;

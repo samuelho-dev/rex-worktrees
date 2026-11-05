@@ -48,10 +48,8 @@ export const resolveWorktreeRoot = Effect.fnUntraced(function*(repoPath: string)
   const config = yield* loadConfig
   const target = yield* project(repoPath)
   for (const entry of config.projectRoots) {
-    const candidate = yield* Effect.catchIf(
-      Effect.catchIf(repository(entry.path), (error) => missing(error), () => Effect.succeed(undefined)),
-      (error) => notRepository(error),
-      () => Effect.succeed(undefined)
+    const candidate = yield* repository(entry.path).pipe(
+      Effect.catchIf(error => missing(error) || notRepository(error), () => Effect.succeed(undefined))
     )
     if (candidate?.vcs === target.vcs && candidate.commonDir === target.commonDir) return entry.worktreeRoot
   }

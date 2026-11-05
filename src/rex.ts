@@ -1,7 +1,6 @@
 import { hostname } from "node:os";
-import { Cause, Effect, Path, Schema } from "effect";
-import { ChildProcessSpawner } from "effect/process";
-import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexResizedSchema, RexTerminalSizeSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type PopupSize, type PopupSizer, type PopupBounds } from "./contracts.ts";
+import { Cause, Context, Effect, Path, Schema } from "effect";
+import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin } from "./contracts.ts";
 import { run } from "./process.ts";
 const localName = hostname().toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
 export const localDirectoryUri = (raw: string): string | undefined => {
@@ -39,7 +38,7 @@ export const machinesRegistry = Effect.gen(function*() {
   const path = yield* Path.Path;
   return yield* parse(RexRegistrySchema, yield* run(yield* binary(path), ["hosts", "list", "--json"], undefined, nativeEnv()));
 });
-const localIdentity = Effect.gen(function*() {
+const readLocalIdentity = Effect.gen(function*() {
   const path = yield* Path.Path;
   const endpoint = process.env.REX_WORKTREES_LOCAL_ENDPOINT;
   if (endpoint !== undefined && !endpoint.startsWith("unix:///")) {
@@ -53,6 +52,10 @@ const localIdentity = Effect.gen(function*() {
   }
   return identity;
 });
+const LocalIdentity = Context.Reference("rex-worktrees/LocalIdentity", { defaultValue: () => readLocalIdentity });
+const localIdentity = Effect.flatten(LocalIdentity);
+// ponytail: share the verified endpoint only within this operation, never across user actions.
+export const withLocalIdentity = Effect.provideServiceEffect(LocalIdentity, Effect.cached(readLocalIdentity));
 const localEndpoint = Effect.gen(function*() {
   const explicit = process.env.REX_WORKTREES_LOCAL_ENDPOINT;
   if (explicit !== undefined) {
@@ -108,74 +111,8 @@ export const originDirectory = Effect.fnUntraced(function*(sessionId: SessionId,
   const processInfo = yield* parse(RexProcessSchema, yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "process"]));
   const cwd = processInfo.foreground?.cwd;
   return cwd?.startsWith("/") && !cwd.includes("\0") ? cwd : undefined;
-});
+}, withLocalIdentity);
 
-// ponytail: proportional feedback uses only the popup's OWN cell size; no source-pane or pixel-chrome guesses.
-export const fitPopupBounds = (bounds: PopupBounds, preferred: PopupSize, observed: PopupSize): PopupBounds | undefined => {
-  if (![...bounds, preferred.columns, preferred.rows, observed.columns, observed.rows].every(Number.isFinite) ||
-    bounds[2] <= 0 || bounds[3] <= 0 || observed.columns <= 0 || observed.rows <= 0 ||
-    preferred.columns <= 0 || preferred.rows <= 0) return undefined;
-  const wantsWidth = observed.columns < preferred.columns || observed.columns > preferred.columns + 2;
-  const wantsHeight = observed.rows < preferred.rows || observed.rows > preferred.rows + 1;
-  const width = wantsWidth ? Math.min(0.92, bounds[2] * (preferred.columns + 1) / observed.columns) : bounds[2];
-  const height = wantsHeight ? Math.min(0.88, bounds[3] * (preferred.rows + 1) / observed.rows) : bounds[3];
-  const next: PopupBounds = [(1 - width) / 2, (1 - height) / 2, width, height];
-  return (Math.abs(width - bounds[2]) > 1e-9 || Math.abs(height - bounds[3]) > 1e-9) ? next : undefined;
-};
-
-export const makePopupSizer = Effect.gen(function*() {
-  const path = yield* Path.Path;
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  let endpoint: string | undefined;
-  const localRex = Effect.fnUntraced(function*(args: readonly string[]) {
-    endpoint ??= yield* localEndpoint.pipe(Effect.provideService(Path.Path, path), Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-    return yield* run(yield* binary(path), ["-S", endpoint, "--autostart=false", ...args], undefined, nativeEnv())
-      .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-  });
-  const sessionId = process.env.REX_SESSION === undefined ? undefined : yield* Schema.decodeUnknownEffect(SessionIdSchema)(process.env.REX_SESSION);
-  const blockId = process.env.REX_BLOCK === undefined ? undefined : yield* Schema.decodeUnknownEffect(BlockIdSchema)(process.env.REX_BLOCK);
-  let pending: string | undefined;
-  let settled: string | undefined;
-  let warning: string | undefined;
-  let targetSize: string | undefined;
-  let attempts = 0;
-  const resize: PopupSizer = Effect.fnUntraced(function*(preferred: PopupSize, observed: PopupSize) {
-    if (!sessionId || !blockId || !observed.columns || !observed.rows) return undefined;
-    const desired = `${preferred.columns}x${preferred.rows}`;
-    if (targetSize !== desired) { targetSize = desired; settled = undefined; attempts = 0; }
-    const seen = `${observed.columns}x${observed.rows}`;
-    if (seen === pending) return warning; // wait for the native terminal resize event, not another keypress
-    if (pending !== undefined && seen !== pending) pending = undefined;
-    const target = `${preferred.columns}x${preferred.rows}:${seen}`;
-    if (settled === target) return warning;
-    if (attempts >= 5) return warning = observed.rows < preferred.rows || observed.columns < 20
-      ? "Could not fit Rex popup: reached the native resize limit; enlarge the Rex window" : undefined;
-    const view = yield* parse(RexViewSchema, yield* localRex(["api", "call", "-s", sessionId, "session.view", JSON.stringify({ session_id: sessionId })]));
-    const layer = view.windows.flatMap(window => window.layers)
-      .find(layer => layer.kind === "floating" && layer.blocks.some(block => block.block_id === blockId));
-    if (!layer?.layer_id || !layer.bounds) { settled = target; return undefined; } // ordinary direct/tiled TUI is not ours to resize
-    const size = yield* parse(RexTerminalSizeSchema, yield* localRex(["block", "call", "-s", sessionId, "-b", blockId, "size"]));
-    if (!size.owner) return undefined; // never cache Rex's unowned default 80x24
-    if (size.columns !== observed.columns || size.rows !== observed.rows) { settled = target; return undefined; }
-    const bounds = fitPopupBounds(layer.bounds, preferred, observed);
-    if (!bounds) {
-      settled = target;
-      attempts = 0;
-      return warning = observed.rows < preferred.rows || observed.columns < 20
-        ? "Could not fit Rex popup: window is too small for the form" : undefined;
-    }
-    yield* parse(RexResizedSchema, yield* localRex(["api", "call", "-s", sessionId, "session.resize_layer",
-      JSON.stringify({ session_id: sessionId, layer_id: layer.layer_id, bounds })]));
-    attempts++;
-    pending = seen;
-    warning = undefined;
-    return undefined;
-  }, (effect, preferred, observed) => effect.pipe(Effect.catch(error => Effect.sync(() => {
-    settled = `${preferred.columns}x${preferred.rows}:${observed.columns}x${observed.rows}`;
-    return warning = `Could not fit Rex popup: ${Cause.pretty(Cause.fail(error))}`;
-  }))));
-  return resize;
-});
 
 // Rex's macOS login wrapper resets PATH before starting a direct command.
 const commandWithPath = (command: readonly string[]) => process.env.PATH
@@ -229,7 +166,7 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
     .filter(client => client.info?.kind === "app" && client.connection_state === "connected");
   const clientId = [sourceOwner, origin.clientId].find(id => id && clients.some(client => client.client_id === id));
   const popupCommand = clientId ? [...command, "--managed-popup", "--origin-client", clientId] : [...command, "--managed-popup"];
-  const width = 0.68, height = 0.35; // ponytail: bootstrap only; the popup fits its own measured terminal after rendering
+  const width = 0.68, height = 0.24; // Fixed bounds for the entire popup lifetime.
   const args = {
     session_id: sessionId, window_id: windowId,
     bounds: [(1 - width) / 2, (1 - height) / 2, width, height],

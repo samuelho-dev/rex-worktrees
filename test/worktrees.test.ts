@@ -372,6 +372,18 @@ it.live(
       const sibling = join(root, "sibling");
       yield* Effect.promise(() => mkdir(sibling));
       git(sibling, "init", "-b", "main");
+      const grouped = join(root, "group", "nested-project");
+      const tooDeep = join(root, "group", "extra", "too-deep");
+      yield* Effect.promise(() => mkdir(grouped, { recursive: true }));
+      yield* Effect.promise(() => mkdir(tooDeep, { recursive: true }));
+      git(grouped, "init", "-b", "main");
+      git(tooDeep, "init", "-b", "main");
+      const hidden = join(root, ".hidden-project");
+      const outside = yield* fixture("symlink-target");
+      yield* Effect.promise(() => mkdir(hidden));
+      git(hidden, "init", "-b", "main");
+      yield* Effect.promise(() => symlink(outside.repo, join(root, "linked-project")));
+      yield* Effect.promise(() => symlink(join(root, "missing"), join(root, "broken-link")));
       expect(
         (yield* discoverProjects([], [], nested)).map(({ path }) => path),
       ).toEqual([repo]);
@@ -385,7 +397,10 @@ it.live(
       ).toEqual([sibling]);
       expect(
         (yield* discoverProjects([root], [])).map(({ path }) => path).sort(),
-      ).toEqual([repo, sibling].sort());
+      ).toEqual([repo, sibling, grouped, hidden, outside.repo].sort());
+      expect(
+        (yield* discoverProjects([root], [sibling, outside.repo], nested)).map(({ path }) => path).slice(0, 3),
+      ).toEqual([repo, sibling, outside.repo]);
     }).pipe(Effect.provide(BunServices.layer)),
 );
 
@@ -655,7 +670,7 @@ it.live("clone uses pushed history, keeps source checkout isolated, and resolves
     const destination = join(root, "destination");
     yield* cloneRepository(described.url, destination);
     expect((yield* repository(destination)).path).toBe(destination);
-    expect(yield* origin(destination, true)).toBe(bare);
+    expect(yield* origin(destination)).toBe(bare);
     expect(yield* remoteBranches(destination)).toContain("published");
     expect(yield* remoteBranches(destination)).toContain("origin/remote-topic");
     expect(yield* remoteBranches(destination)).not.toContain("origin/local-topic");

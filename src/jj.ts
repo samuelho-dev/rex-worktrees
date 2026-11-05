@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path, PlatformError, Schema } from "effect"
+import { Context, Effect, FileSystem, Path, PlatformError, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { planCheckoutPath } from "./checkout.ts"
 import {
@@ -19,7 +19,7 @@ const isolatedEnv = (): Environment => {
 }
 const jj = (repo: string, ...args: string[]) => run("jj", ["-R", repo, "--no-pager", "--color=never", ...args], undefined, isolatedEnv())
 const inventory = (repo: string, ...args: string[]) => jj(repo, "--ignore-working-copy", "--at-op=@", ...args)
-const version = Effect.fnUntraced(function*() {
+const checkVersion = Effect.fnUntraced(function*() {
   for (const [program, minimum] of [["jj", [0, 46]], ["git", [2, 42]]] as const) {
     const output = yield* run(program, ["--version"], undefined, isolatedEnv()).pipe(
       Effect.catchIf(
@@ -33,6 +33,10 @@ const version = Effect.fnUntraced(function*() {
     }
   }
 })
+const ToolValidation = Context.Reference("rex-worktrees/JjToolValidation", { defaultValue: () => checkVersion() })
+const version = Effect.flatten(ToolValidation)
+// ponytail: cache tool checks for one operation; the next request validates its own PATH again.
+export const withToolValidation = Effect.provideServiceEffect(ToolValidation, Effect.cached(checkVersion()))
 const workspaceTemplate = 'json({"name" => name, "path" => root, "commitId" => self.target().commit_id(), "changeId" => self.target().change_id()}) ++ "\\n"'
 const revisionTemplate = 'json({"commitId" => commit_id, "changeId" => change_id, "description" => description, "conflict" => self.conflict()}) ++ "\\n"'
 const workspaceRow = Schema.Struct({ name: JjWorkspaceNameSchema, path: Schema.NullOr(Schema.String), commitId: JjCommitIdSchema, changeId: JjChangeIdSchema })
@@ -80,7 +84,7 @@ const metadata = Effect.fnUntraced(function*(dot: string) {
   return target
 })
 export const repository = Effect.fnUntraced(function*(input: string) {
-  yield* version()
+  yield* version
   const path = yield* Path.Path
   const { directory, dot } = yield* marker(input)
   return { vcs: "jj", path: directory, commonDir: yield* metadata(dot), name: path.basename(directory) } satisfies JjRepository
@@ -126,15 +130,21 @@ export const resolveRevision = Effect.fnUntraced(function*(repo: string, express
 })
 export const listRevisions = Effect.fnUntraced(function*(repo: string) {
   const current = yield* repository(repo)
-  const bookmarks = (yield* rows(bookmarkRow, yield* inventory(current.path, "bookmark", "list", "-T", bookmarkTemplate)))
-    .filter(item => item.present && !item.conflict && /^[0-9a-f]{40,64}$/.test(item.target))
-  const choices: JjRevisionChoice[] = []
-  const mainline = yield* inventory(current.path, "log", "-r", "trunk()", "--no-graph", "--limit", "2", "-T", revisionTemplate).pipe(
+  const candidates = ["@-", "bookmarks()", "remote_bookmarks()"]
+  const mainlineQuery = inventory(current.path, "log", "-r", "trunk()", "--no-graph", "--limit", "2", "-T", revisionTemplate).pipe(
     Effect.catchIf(
       error => Schema.is(CommandError)(error) && error.program === "jj" && /^Error: (?:Failed to (?:parse|resolve) revset|Invalid revset|Revision |Revset |Cannot resolve |No such revision)/i.test(error.stderr),
       () => Effect.succeed("")
     )
   )
+  const [bookmarkText, mainline, ...candidateText] = yield* Effect.all([
+    inventory(current.path, "bookmark", "list", "-T", bookmarkTemplate),
+    mainlineQuery,
+    ...candidates.map(expression => inventory(current.path, "log", "-r", expression, "--no-graph", "--limit", "40", "-T", revisionTemplate))
+  ], { concurrency: 4 })
+  const bookmarks = (yield* rows(bookmarkRow, bookmarkText))
+    .filter(item => item.present && !item.conflict && /^[0-9a-f]{40,64}$/.test(item.target))
+  const choices: JjRevisionChoice[] = []
   const mainlineRows = yield* rows(revisionRow, mainline)
   if (mainlineRows.length === 1 && !mainlineRows[0]!.conflict && !/^0+$/.test(mainlineRows[0]!.commitId)) {
     const item = mainlineRows[0]!
@@ -144,9 +154,8 @@ export const listRevisions = Effect.fnUntraced(function*(repo: string) {
       revision: { commitId: item.commitId, changeId: item.changeId, description: item.description }
     })
   }
-  const candidates = ["@-", "bookmarks()", "remote_bookmarks()"]
-  for (const expression of candidates) {
-    const raw = yield* inventory(current.path, "log", "-r", expression, "--no-graph", "--limit", "40", "-T", revisionTemplate)
+  for (const [index, expression] of candidates.entries()) {
+    const raw = candidateText[index]!
     for (const item of yield* rows(revisionRow, raw)) {
       if (item.conflict || choices.some(choice => choice.revision.commitId === item.commitId)) continue
       const revision = { commitId: item.commitId, changeId: item.changeId, description: item.description }
@@ -211,7 +220,7 @@ export const newChange = Effect.fnUntraced(function*(repo: string, base: JjRevis
   return after
 })
 export const cloneRepository = Effect.fnUntraced(function*(url: string, destination: string) {
-  yield* version()
+  yield* version
   const safe = yield* Effect.try({ try: () => safeOrigin(url, true), catch: () => new AppError({ message: "Unsafe JJ clone URL" }) })
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const child = yield* spawner.spawn(ChildProcess.make("jj", ["git", "clone", safe, destination], {

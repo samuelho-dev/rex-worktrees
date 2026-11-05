@@ -318,7 +318,7 @@ export const cloneDestination = Effect.fnUntraced(function*(destination: string,
         () => fail(`Clone destination already exists and is not a repository: ${current}`)
       ));
       if (repo.path !== current || repo.vcs !== vcs) return yield* fail(`Clone destination is not the requested ${vcs} repository: ${current}`);
-      const actual = repo.vcs === "git" ? yield* origin(current, true) : (yield* jj.cloneSource(current, sourceHostId ?? (yield* localHost).id)).url;
+      const actual = repo.vcs === "git" ? yield* origin(current) : (yield* jj.cloneSource(current, sourceHostId ?? (yield* localHost).id)).url;
       if (actual !== url) return yield* fail(`Clone destination belongs to a different origin: ${current}`);
       return repo.commonDir;
     }
@@ -475,7 +475,7 @@ export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan)
   const repo = yield* repository(plan.repo);
   if (repo.path !== plan.repo || repo.vcs !== plan.vcs || (plan.existing && repo.commonDir !== plan.commonDir))
     return yield* fail(`Clone repository changed; retained at ${plan.repo}`);
-  const actual = repo.vcs === "git" ? yield* origin(repo.path, true) : (yield* jj.cloneSource(repo.path, plan.hostId)).url;
+  const actual = repo.vcs === "git" ? yield* origin(repo.path) : (yield* jj.cloneSource(repo.path, plan.hostId)).url;
   if (actual !== url) return yield* fail(`Clone origin changed; retained at ${plan.repo}`);
   if (plan.vcs === "jj") {
     const base = plan.base ?? (yield* jj.resolveRevision(repo.path, "@-"));

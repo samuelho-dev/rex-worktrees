@@ -55,13 +55,10 @@ const request = Effect.fnUntraced(function*(host: DestinationHost, command: read
   return yield* connectedRequest(host, command, body);
 });
 
-const discovery = (result: Extract<Response, { kind: "discover" }>) =>
-({ sessions: result.sessions, clients: result.clients, projects: result.projects, roots: result.roots ?? [], cloneRoot: result.cloneRoot, ...(result.checkout ? { checkout: result.checkout } : {}) });
-
-export const discover = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], context?: string) {
-  const result = yield* request(host, command, { kind: "discover", ...(host.local && context ? { context } : {}) });
-  if (result.kind !== "discover") return yield* fail("Unexpected discovery response");
-  return discovery(result);
+export const inspectSessions = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[]) {
+  const result = yield* request(host, command, { kind: "sessions" });
+  if (result.kind !== "sessions") return yield* fail("Unexpected sessions response");
+  return { sessions: result.sessions, clients: result.clients };
 });
 
 // ponytail: only this immediate read follows the just-validated connection; later requests revalidate.
@@ -69,7 +66,8 @@ export const connectAndDiscover = Effect.fnUntraced(function*(machine: Machine, 
   const host = yield* connectMachine(machine);
   const result = yield* connectedRequest(host, command, { kind: "discover", ...(host.local && context ? { context } : {}) });
   if (result.kind !== "discover") return yield* fail("Unexpected discovery response");
-  return { host, ...discovery(result) };
+  return { host, sessions: result.sessions, clients: result.clients, projects: result.projects,
+    roots: result.roots ?? [], cloneRoot: result.cloneRoot, ...(result.checkout ? { checkout: result.checkout } : {}) };
 });
 export const inspectProject = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], path: string) {
   const result = yield* request(host, command, { kind: "project", path });

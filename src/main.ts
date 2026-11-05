@@ -5,10 +5,11 @@ import { connectMachine, inspectProject, listMachines, review, submit } from "./
 import { AppError, BlockIdSchema, ClientIdSchema, CliBooleanFlagSchema, CliStringFlagSchema, CloneTaskRequestSchema, SessionIdSchema, TaskRequestSchema, type CliFlags, type LaunchInput, type PopupOrigin } from "./contracts.ts"
 import { repository } from "./repositories.ts"
 import { hostRequest } from "./host.ts"
-import { closeManagedPopup, openPopup, originDirectory } from "./rex.ts"
+import { closeManagedPopup, openPopup, originDirectory, withLocalIdentity } from "./rex.ts"
 import { setup } from "./setup.ts"
 import { popup } from "./ui.ts"
 import { cloneTask, task } from "./worktrees.ts"
+import { withToolValidation } from "./jj.ts"
 // Replaced by `bun build --define`; undefined in source-mode Bun.
 declare const REX_WORKTREES_COMPILED: boolean
 const compiled = typeof REX_WORKTREES_COMPILED !== "undefined" && REX_WORKTREES_COMPILED
@@ -163,13 +164,13 @@ const main = Effect.gen(function*() {
  if (verb === "task") {
   if (args.length !== 1) return yield* Effect.fail(new AppError({ message: "task requires one JSON argument" }))
   const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TaskRequestSchema))(args[0])
-  yield* task(request)
+  yield* withLocalIdentity(withToolValidation(task(request)))
   return
  }
  if (verb === "clone-task") {
   if (args.length !== 1) return yield* Effect.fail(new AppError({ message: "clone-task requires one JSON argument" }))
   const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CloneTaskRequestSchema))(args[0])
-  yield* cloneTask(request)
+  yield* withLocalIdentity(withToolValidation(cloneTask(request)))
   return
  }
  if (verb === "host-request") {

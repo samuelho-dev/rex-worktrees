@@ -8,6 +8,7 @@ import { originDirectory } from "../src/rex.ts";
 const fixture = vi.hoisted(() => ({
   pwd: "file://foreign.invalid/projects/current",
   blockHost: "local-host",
+  identityHost: "local-host",
   calls: [] as string[],
 }));
 
@@ -18,7 +19,7 @@ vi.mock("../src/process.ts", async () => {
     run: (_program: string, args: readonly string[]) => Effect.sync(() => {
       const command = args.at(-1)!;
       fixture.calls.push(command);
-      if (args.includes("whoami")) return JSON.stringify({ host_id: "local-host", endpoint: "unix:///tmp/rex.sock", principal: { transport: "unix" } });
+      if (args.includes("whoami")) return JSON.stringify({ host_id: fixture.identityHost, endpoint: "unix:///tmp/rex.sock", principal: { transport: "unix" } });
       if (args.includes("window")) return JSON.stringify({ windows: [{ window_id: "window", label: "window", layers: [{ blocks: [{ block_id: "block", host_id: fixture.blockHost }] }] }] });
       if (command === "pwd") return JSON.stringify({ pwd: fixture.pwd });
       if (command === "process") return JSON.stringify({ last_exit: null, foreground: { cwd: "/projects/current" } });
@@ -37,6 +38,8 @@ it("selects a verified pane's foreground directory when its reported URI is not 
 
   fixture.calls = [];
   fixture.pwd = "file://localhost/projects/reported";
+  fixture.identityHost = "replacement-local-host";
+  fixture.blockHost = "replacement-local-host";
   expect(await origin()).toBe("/projects/reported");
   expect(fixture.calls).not.toContain("process");
 

@@ -52,15 +52,15 @@ export const safeOrigin = (raw: string, sameHost: boolean, base?: string): strin
   throw new Error("Unsafe origin URL")
 }
 
-export const origin = Effect.fnUntraced(function*(repoPath: string, sameHost: boolean) {
+export const origin = Effect.fnUntraced(function*(repoPath: string) {
   const raw = yield* git(repoPath, "config", "--get", "remote.origin.url").pipe(Effect.catch(() => fail("Repository has no usable origin URL")))
-  return yield* Effect.try({ try: () => safeOrigin(raw.replace(/\n$/, ""), sameHost, repoPath),
+  return yield* Effect.try({ try: () => safeOrigin(raw.replace(/\n$/, ""), true, repoPath),
     catch: () => new AppError({ message: "Repository origin URL is unsafe or local to another Rex host" }) })
 })
 
 export const cloneSource = Effect.fnUntraced(function*(repoPath: string, sourceHostId: ServerHostId) {
   const repo = yield* repository(repoPath)
-  const url = yield* origin(repo.path, true)
+  const url = yield* origin(repo.path)
   const refs = yield* git(repo.path, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes/origin")
   const branches = [...new Set(refs.split("\n").flatMap(ref =>
     ref.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] :
@@ -145,10 +145,8 @@ export const project = Effect.fnUntraced(function*(input: string) {
     const [primary] = yield* listWorktrees(checkout.path)
     if (!primary) return checkout
     if (primary.path === checkout.path) return checkout
-    const main = primary.bare ? undefined : yield* Effect.catchIf(
-      Effect.catchIf(repository(primary.path), (error) => missing(error), () => Effect.succeed(undefined)),
-      (error) => notRepository(error),
-      () => Effect.succeed(undefined)
+    const main = primary.bare ? undefined : yield* repository(primary.path).pipe(
+      Effect.catchIf(error => missing(error) || notRepository(error), () => Effect.succeed(undefined))
     )
     return main?.commonDir === checkout.commonDir
       ? main

@@ -35,26 +35,17 @@ export const discoverProjects = Effect.fnUntraced(function*(roots: readonly stri
   for (const root of roots) {
     if (!(yield* fs.exists(root))) continue
     candidates.push(root)
-    // ponytail: two levels of candidates, never a recursive walk through home or build trees.
-    for (const name of yield* fs.readDirectory(root)) {
-      const first = path.join(root, name)
-      if (!(yield* fs.exists(first))) continue
-      const info = yield* fs.stat(first)
-      if (info.type !== "Directory") continue
-      candidates.push(first)
-      for (const child of yield* fs.readDirectory(first)) {
-        const second = path.join(first, child)
-        if ((yield* fs.exists(second)) && (yield* fs.stat(second)).type === "Directory") candidates.push(second)
-      }
-    }
+    // ponytail: two levels only; glob uses directory-entry types instead of statting every file.
+    const markers = yield* fs.glob("{*,*/*}/{.git,.jj}", { root, dot: true })
+    candidates.push(...markers.map(marker => path.join(root, path.dirname(marker))))
   }
   const found: Repository[] = []
   const seen = new Set<string>()
-  for (const candidate of candidates) {
-    const repo = yield* Effect.catchIf(
-      Effect.catchIf(project(candidate), (error) => missing(error), () => Effect.succeed(undefined)),
-      (error) => Git.notRepository(error), () => Effect.succeed(undefined)
-    )
+  const inspected = yield* Effect.forEach(new Set(candidates), candidate =>
+    project(candidate).pipe(
+      Effect.catchIf(error => missing(error) || Git.notRepository(error), () => Effect.succeed(undefined))
+    ), { concurrency: 4 })
+  for (const repo of inspected) {
     if (repo && !seen.has(`${repo.vcs}\0${repo.commonDir}`)) {
       seen.add(`${repo.vcs}\0${repo.commonDir}`)
       found.push(repo)

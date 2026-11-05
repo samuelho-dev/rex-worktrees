@@ -1,9 +1,7 @@
 import { Cause, Effect, Option, Queue, Result, Scope, Terminal } from "effect"
 import { Prompt } from "effect/cli"
-import { connectAndDiscover, connectMachine, discover, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
-import { AppError, type ClientTarget, type CloneInput, type ClonePlan, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type LaunchPlan, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type PromptAction, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
-import { makePopupSizer } from "./rex.ts"
-import { sameClonePlan, sameLaunchPlan } from "./worktrees.ts"
+import { connectAndDiscover, connectMachine, inspectSessions, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
+import { AppError, type ClientTarget, type CloneInput, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
 
 const codes: Record<Color, string> = { cyan: "\x1b[36m", amber: "\x1b[33m", muted: "\x1b[90m", red: "\x1b[31m", bold: "\x1b[1m" }
 const color = (text: string, tone: Color, enabled: boolean) => enabled ? `${codes[tone]}${text}\x1b[0m` : text
@@ -15,67 +13,59 @@ const safeDisplayText = (text: string, preserveWhitespace = false) => {
 const fit = (text: string, width: number) => Bun.stringWidth(text) > width ? Bun.sliceAnsi(text, 0, Math.max(0, width), { ellipsis: "…" }) : text
 const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width - Bun.stringWidth(text)))
 
-/** Pure frame used by the terminal painter and the narrow-screen/security checks. */
-export const renderFormFrame = (view: FormView, focused: FormField, editing: boolean, columns: number, rows: number, colors = !process.env.NO_COLOR, fill = true): string => {
-  const width = Math.max(20, columns)
+/** Every state uses the same compact field viewport, detail dock, and footer. */
+export const renderFormFrame = (view: FormView, focused: FormField, columns: number, rows: number, colors = !process.env.NO_COLOR,
+  options: { readonly editor?: { readonly title: string; readonly lines: readonly string[] }; readonly detailOffset?: number; readonly footer?: string } = {}): string => {
+  const width = Math.max(2, columns)
   const inside = width - 2
   const screen: string[] = []
-  const border = (body: string) => `${color("│", "muted", colors)}${pad(body, inside)}${color("│", "muted", colors)}`
-  const line = (left: string, right: string) => color(`${left}${"─".repeat(width - 2)}${right}`, "muted", colors)
-  const add = (text: string) => screen.push(border(fit(text, inside)))
+  const border = (body: string) => `${color("│", "muted", colors)}${pad(fit(body, inside), inside)}${color("│", "muted", colors)}`
+  const line = (left: string, right: string, title = "") => {
+    const text = fit(safeDisplayText(title), inside)
+    return color(`${left}${text}${"─".repeat(Math.max(0, inside - Bun.stringWidth(text)))}${right}`, "muted", colors)
+  }
+  const add = (text: string) => screen.push(border(text))
   screen.push(line("┌", "┐"))
-  const heading = `${color("REX", "cyan", colors)} ${color("/ WORKTREES", "bold", colors)}`
-  add(heading)
+  add(`${color("REX", "cyan", colors)} ${color("/ WORKTREES", "bold", colors)}`)
   screen.push(line("├", "┤"))
-  // ponytail: reserve exactly the editor's four/six rows at this terminal height.
-  const budget = Math.max(0, rows - (editing ? rows >= 20 ? 10 : 8 : 7))
-  const body: string[] = []
-  const addBody = (text: string) => body.push(border(fit(text, inside)))
-  const addWrapped = (text: string, tone: Color, limit = budget) => {
-    for (const part of Bun.wrapAnsi(safeDisplayText(text), inside - 2, { hard: true }).split("\n")) {
-      if (body.length >= limit) break
-      addBody(`  ${color(part, tone, colors)}`)
-    }
-  }
-  for (const row of view.rows) {
+  const fieldCount = Math.max(1, Math.min(5, rows - 11))
+  const detailCount = Math.max(3, rows - fieldCount - 8)
+  const focusIndex = view.rows.findIndex(row => row.id === focused)
+  const start = Math.max(0, Math.min(focusIndex - fieldCount + 1, view.rows.length - fieldCount))
+  for (let index = 0; index < fieldCount; index++) {
+    const row = view.rows[start + index]
+    if (!row) { add(""); continue }
     const active = focused === row.id
-    const label = pad(fit(safeDisplayText(row.label).toUpperCase(), 13), 13)
-    const value = safeDisplayText(row.value) || "—"
-    const room = Math.max(1, inside - 19)
-    const indicator = active ? color("›", "cyan", colors) : " "
-    addBody(`${indicator} ${color(label, row.disabled ? "muted" : active ? "cyan" : "bold", colors)}  ${color(fit(value, room), row.disabled ? "muted" : active ? "bold" : "muted", colors)}`)
-    if (!editing && row.detail && (row.id === "destination" && row.detail.startsWith("/") || !view.error && active) && body.length < budget - 3)
-      addWrapped(row.detail, "muted", budget - 3)
+    const tone = row.disabled ? "muted" : active ? "cyan" : "bold"
+    const indicator = index === 0 && start > 0 ? "↑" : index === fieldCount - 1 && start + fieldCount < view.rows.length ? "↓" : active ? "›" : " "
+    add(`${color(indicator, tone, colors)} ${color(pad(fit(safeDisplayText(row.label).toUpperCase(), 13), 13), tone, colors)}  ${color(fit(safeDisplayText(row.value) || "—", Math.max(1, inside - 17)), tone, colors)}`)
   }
-  if (view.error) {
-    const errorLimit = budget - (view.fitWarning && budget - body.length > 1 ? 1 : 0)
-    addWrapped(view.error, "red", errorLimit)
-  } else if (view.notice) addWrapped(view.notice, "amber")
-  if (view.fitWarning) addWrapped(view.fitWarning, "amber")
-  if (view.error && view.notice && body.length < budget) addBody(`  ${color(fit(safeDisplayText(view.notice), inside - 2), "amber", colors)}`)
-  if (fill) while (body.length < budget) addBody("")
-  screen.push(...body.slice(0, budget))
-  if (!editing) {
-    screen.push(line("├", "┤"))
-    const submit = focused === "submit" ? color("›", "cyan", colors) : " "
-    const cancel = focused === "cancel" ? color("›", "cyan", colors) : " "
-    add(`${submit} ${color(fit(safeDisplayText(view.submitLabel), Math.max(1, inside - 19)), view.submitDisabled ? "muted" : "cyan", colors)}     ${cancel} ${color("Cancel", focused === "cancel" ? "cyan" : "muted", colors)}`)
-    add(color("  ↑↓ / jk move · Tab next · Enter select · Ctrl+S submit · Esc close", "muted", colors))
+  add("")
+  const current = view.rows.find(row => row.id === focused)
+  screen.push(line("├", "┤", ` ${options.editor?.title ?? current?.label ?? "Details"} `))
+  const subtitle = current?.detail ?? view.rows.find(row => row.id === "destination")?.detail ?? ""
+  const wrapped = [view.error, view.notice, subtitle].filter(Boolean).flatMap(message =>
+    Bun.wrapAnsi(safeDisplayText(message!), Math.max(1, inside - 10), { hard: true }).split("\n"))
+  const visible = options.editor ? 1 : detailCount
+  const offset = Math.max(0, Math.min(options.detailOffset ?? 0, wrapped.length - visible))
+  const detailLine = (index: number) => `${index === 0 && offset > 0 ? "↑ " : ""}${wrapped[offset + index] ?? ""}${index === visible - 1 && offset + visible < wrapped.length ? " ↓ PgDn" : ""}`
+  if (options.editor) {
+    const errorRows = view.error ? 1 : 0
+    for (let index = 0; index < detailCount - errorRows; index++) add(options.editor.lines[index] ?? "")
+    if (errorRows) add(color(detailLine(0), "red", colors))
+  } else {
+    for (let index = 0; index < detailCount; index++) add(color(detailLine(index), view.error ? "red" : view.notice ? "amber" : "muted", colors))
   }
+  screen.push(line("├", "┤"))
+  const hint = (key: string, label: string) => `${color(key, "bold", colors)} ${color(label, "muted", colors)}`
+  const button = (label: string, active: boolean, primary = false, disabled = false) =>
+    color(`${active ? "›" : " "}[ ${safeDisplayText(label)} ]`, disabled ? "muted" : active ? "cyan" : primary ? "bold" : "muted", colors)
+  add(options.footer ? color(options.footer, "muted", colors) : options.editor
+    ? `${hint("Enter", "accept")} · ${hint("Esc", "back")} · ${hint("↑↓", "choices")} · ${hint("PgUp/PgDn", "details")}`
+    : `${button(`${view.submitLabel} · Ctrl+S`, focused === "submit", true, view.submitDisabled)} ${button("Cancel · Esc", focused === "cancel")}  ${hint("Tab", "next")}`)
   screen.push(line("└", "┘"))
-  // Native Effect editors need a following line; the main form must not scroll past its bottom border.
-  return screen.join("\r\n") + (editing ? "\r\n" : "")
+  return screen.slice(0, Math.max(1, rows)).join("\r\n")
 }
-
-/** Size from unclipped content, including the tallest focus detail and the editor reserve. */
-export const naturalFormRows = (view: FormView, columns: number, editing = false): number => {
-  const fields: FormField[] = [...view.rows.map(row => row.id), "submit"]
-  return Math.max(...fields
-    .map(field => renderFormFrame(view, field, editing, columns, 1000, false, false).split("\r\n").length - (editing ? 1 : 0))) + (editing ? 6 : 0)
-}
-// ponytail: keep the main viewport stable; editors reserve six more rows but still grow for content.
-export const popupTargetRows = (view: FormView, columns: number, editing = false): number =>
-  Math.max(16 + (editing ? 6 : 0), naturalFormRows(view, Math.min(96, columns), editing))
 
 const matchingChoices = <A>(choices: readonly InputChoice<A>[], text: string): number[] => {
   const query = text.toLocaleLowerCase()
@@ -120,47 +110,34 @@ export const advanceInputChoice = <A>(
 }
 
 export const renderInputChoice = <A>(
-  message: string, state: InputChoiceState, choices: readonly InputChoice<A>[], columns: number, rows: number, colors = !process.env.NO_COLOR, selectionOnly = false
-): string => {
+  state: InputChoiceState, choices: readonly InputChoice<A>[], columns: number, rows: number, colors = !process.env.NO_COLOR, selectionOnly = false, count = Math.max(2, rows - 14)
+): readonly string[] => {
   const width = Math.max(20, columns) - 2
   const matches = matchingChoices(choices, state.text)
-  const count = rows >= 20 ? 3 : 1
   const selected = matches.indexOf(state.selected ?? -1)
   const start = selected < 0 ? 0 : Math.max(0, Math.min(selected, matches.length - count))
-  const lines = [`  ${fit(safeDisplayText(message), width - 2)}`,
-  `  ${color("›", "cyan", colors)} ${fit(safeDisplayText(state.text, true) || (selectionOnly ? "Filter exact choices…" : "Type new value…"), width - 4)}`]
+  const lines = [`${color("›", "cyan", colors)} ${fit(safeDisplayText(state.text, true) || (selectionOnly ? "Filter exact choices…" : "Type new value…"), width - 2)}`]
   for (const index of matches.slice(start, start + count)) {
     const choice = choices[index]
     if (!choice) continue
     const label = `${state.selected === index ? "›" : " "} ${safeDisplayText(choice.title)}${choice.description ? ` · ${safeDisplayText(choice.description)}` : ""}`
-    lines.push(`  ${fit(label, width - 2)}`)
+    lines.push(fit(label, width))
   }
-  while (lines.length < count + 2) lines.push("")
-  lines.push(`  ${fit(selectionOnly ? "Enter selected · ↑↓ choose · Ctrl+U clear · Esc back" : "Enter typed/selected · ↑↓ choose · Ctrl+U clear · Esc back", width - 2)}`)
-  return lines.join("\r\n")
+  return lines
 }
 
-const acknowledge = (title: string, lines: readonly string[], tone: NoticeTone): Effect.Effect<void, Terminal.QuitError, Prompt.Environment> =>
-  Prompt.run(Prompt.Custom<boolean, void>(false, {
-    render: (_, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
+const acknowledge = (title: string, lines: readonly string[], tone: NoticeTone, view: FormView = { rows: [], submitLabel: "Close" }): Effect.Effect<void, Terminal.QuitError, Prompt.Environment> =>
+  Prompt.run(Prompt.Custom<number, void>(0, {
+    render: (detailOffset, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
       const terminal = yield* Terminal.Terminal
-      const width = Math.max(20, yield* terminal.columns)
-      const height = yield* terminal.rows
-      const active = !process.env.NO_COLOR
-      const output = [color(`  REX / ${safeDisplayText(title)}`, tone === "error" ? "red" : tone === "warning" ? "amber" : "cyan", active), ""]
-      for (const line of lines) {
-        for (const part of Bun.wrapAnsi(safeDisplayText(line), width - 4, { hard: true }).split("\n")) {
-          if (output.length >= height - 3) break
-          output.push(`  ${part}`)
-        }
-      }
-      output.push("", color("  Enter / Space confirm · Esc / Ctrl+C close", "muted", active))
-      return `\x1b[H\x1b[2J${output.join("\r\n")}\r\n`
+      const notice = `${title} · ${lines.join(" · ")}`
+      return `\x1b[H\x1b[2J${renderFormFrame({ ...view, error: tone === "error" ? notice : undefined, notice: tone !== "error" ? notice : undefined }, "submit", yield* terminal.columns, yield* terminal.rows, !process.env.NO_COLOR, { detailOffset, footer: "Enter / Space close · Esc close · PgUp/PgDn details" })}`
     }),
     clear: () => Effect.succeed(""),
-    process: (input) => Effect.succeed<PromptAction<boolean, void>>(input.key.name === "enter" || input.key.name === "return" || input.key.name === "space" || input.key.name === "escape" || input.key.ctrl && input.key.name === "c"
-      ? { _tag: "Submit", value: undefined }
-      : { _tag: "Beep" })
+    process: (input, offset) => Effect.succeed<Prompt.Action<number, void>>(input.key.name === "pageup" || input.key.name === "pagedown"
+      ? { _tag: "NextFrame", state: Math.max(0, offset + (input.key.name === "pageup" ? -1 : 1)) }
+      : input.key.name === "enter" || input.key.name === "return" || input.key.name === "space" || input.key.name === "escape" || input.key.ctrl && input.key.name === "c"
+        ? { _tag: "Submit", value: undefined } : { _tag: "Beep" })
   })).pipe(Effect.catch(() => Effect.void))
 
 const problem = (error: unknown) => error instanceof AppError ? error.message : Cause.pretty(Cause.fail(error))
@@ -226,14 +203,18 @@ export const selectRevision = (draft: Draft, choice: JjRevisionChoice): Draft =>
 
 export const cloneInputFor = (draft: Draft): CloneInput | undefined => {
   if (!draft.host || !draft.clone || !draft.session || !draft.clone.repo.startsWith("/")) return undefined
-  if (draft.clone.vcs === "jj") return {
-    vcs: "jj", source: {
-      vcs: "jj", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
-      revisions: draft.clone.revisions, ...(draft.clone.revision ? { revision: draft.clone.revision } : {})
-    },
-    repo: draft.clone.repo, session: draft.session, clientId: draft.clientId,
-    name: generatedName(draft), ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {}),
-    ...(draft.destination?.revision ? { revision: draft.destination.revision } : {})
+  if (draft.clone.vcs === "jj") {
+    const revision = draft.clone.revision?.commitId === draft.destination?.revision ? draft.clone.revision
+      : draft.clone.revisions.find(choice => choice.revision.commitId === draft.destination?.revision)?.revision
+    return {
+      vcs: "jj", source: {
+        vcs: "jj", url: draft.clone.url, sourceHostId: draft.clone.sourceHostId,
+        revisions: [], ...(revision ? { revision } : {})
+      },
+      repo: draft.clone.repo, session: draft.session, clientId: draft.clientId,
+      name: generatedName(draft), ...(draft.worktreeName ? { worktreeName: draft.worktreeName } : {}),
+      ...(draft.destination?.revision ? { revision: draft.destination.revision } : {})
+    }
   }
   if (!draft.destination?.branch) return undefined
   return {
@@ -262,58 +243,48 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
       let sessions: readonly SessionTarget[] = []
       let focused: FormField = "project"
       let error: string | undefined
-      let plan: LaunchPlan | undefined
-      let clonePlan: ClonePlan | undefined
+      let blocked = false
       let cloneRoot = ""
       let cloneRoots: readonly string[] = []
       let contextPath: string | undefined
-      const resizePopup = yield* makePopupSizer
       let activeView: FormView | undefined
-      let repaint: Queue.Queue<Terminal.Size> | undefined
-      const fitRequests = yield* Queue.sliding<{ view: FormView; columns: number; rows: number; editing: boolean }>(1)
-      yield* Effect.forever(Effect.gen(function*() {
-        const { view, columns, rows, editing } = yield* Queue.take(fitRequests)
-        const warning = yield* resizePopup(
-          { columns: 96, rows: popupTargetRows(view, columns, editing) },
-          { columns, rows }
-        )
-        if (activeView !== view) return
-        const changed = view.fitWarning !== warning
-        view.fitWarning = warning
-        if (changed && repaint) yield* Queue.offer(repaint, { columns, rows })
-      })).pipe(Effect.forkScoped)
+      const resizeEvents = Effect.gen(function*() {
+        const source = yield* terminal.size
+        const events = yield* Queue.sliding<Terminal.Size>(1)
+        yield* Effect.forever(Queue.take(source).pipe(Effect.flatMap(value => Queue.offer(events, value)))).pipe(Effect.forkScoped)
+        return events
+      })
       const chooseField: (view: FormView, initialFocus: FormField) => Effect.Effect<FormField, Terminal.QuitError, Prompt.Environment> =
         Effect.fnUntraced(function*(view: FormView, initialFocus: FormField) {
-          const terminal = yield* Terminal.Terminal
-          const size = yield* terminal.size
-          const resized = yield* Queue.sliding<Terminal.Size>(1)
-          yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
-          yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
+          let detailOffset = 0
           const fields: FormField[] = [...view.rows.map(row => row.id), "submit", "cancel"]
           const initial = Math.max(0, fields.indexOf(initialFocus))
-          const prompt = Prompt.Custom<number, FormField, Terminal.Size>(initial, resized, {
+          const prompt = Prompt.Custom<number, FormField, Terminal.Size>(initial, yield* resizeEvents, {
             render: (index, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
               const columns = yield* terminal.columns
               const rows = yield* terminal.rows
-              yield* Queue.offer(fitRequests, { view, columns, rows, editing: false })
-              return `\x1b[H\x1b[2J${renderFormFrame(view, fields[index], false, columns, rows)}`
+              return `\x1b[H\x1b[2J${renderFormFrame(view, fields[index], columns, rows, !process.env.NO_COLOR, { detailOffset })}`
             }),
             clear: () => Effect.succeed(""),
             process: (event, index) => {
-              if (event._tag === "Event") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "NextFrame", state: index })
+              if (event._tag === "Event") return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "NextFrame", state: index })
               const { key } = event.input
-              if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<PromptAction<number, FormField>>({ _tag: "Submit", value: "cancel" })
-              if (key.ctrl && key.name === "s") return Effect.succeed<PromptAction<number, FormField>>(view.submitDisabled
+              if (key.name === "pageup" || key.name === "pagedown") {
+                detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -1 : 1))
+                return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "NextFrame", state: index })
+              }
+              if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "Submit", value: "cancel" })
+              if (key.ctrl && key.name === "s") return Effect.succeed<Prompt.Action<number, FormField>>(view.submitDisabled
                 ? { _tag: "Beep" } : { _tag: "Submit", value: "submit" })
               if (key.name === "enter" || key.name === "return") {
                 const selected = fields[index]
-                return Effect.succeed<PromptAction<number, FormField>>(selected === "submit" && view.submitDisabled || view.rows.some(row => row.id === selected && row.disabled)
+                return Effect.succeed<Prompt.Action<number, FormField>>(selected === "submit" && view.submitDisabled || view.rows.some(row => row.id === selected && row.disabled)
                   ? { _tag: "Beep" }
                   : { _tag: "Submit", value: selected })
               }
               const backward = key.name === "up" || key.name === "k" && !key.ctrl || key.name === "backtab" || key.name === "tab" && key.shift
               const forward = key.name === "down" || key.name === "j" && !key.ctrl || key.name === "tab"
-              return Effect.succeed<PromptAction<number, FormField>>(backward || forward
+              return Effect.succeed<Prompt.Action<number, FormField>>(backward || forward
                 ? { _tag: "NextFrame", state: (index + (backward ? -1 : 1) + fields.length) % fields.length }
                 : { _tag: "Beep" })
             }
@@ -322,26 +293,27 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         }, Effect.scoped)
       const inputChoice: <A>(options: InputChoiceOptions<A>) => Effect.Effect<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment> =
         Effect.fnUntraced(function*<A>(options: InputChoiceOptions<A>): Effect.fn.Return<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment | Scope.Scope> {
-          const terminal = yield* Terminal.Terminal
-          const size = yield* terminal.size
-          const resized = yield* Queue.sliding<Terminal.Size>(1)
-          yield* Effect.forever(Queue.take(size).pipe(Effect.flatMap(value => Queue.offer(resized, value)))).pipe(Effect.forkScoped)
-          yield* Effect.acquireRelease(Effect.sync(() => { repaint = resized }), () => Effect.sync(() => { repaint = undefined }))
+          let detailOffset = 0
           const result = yield* Prompt.run(Prompt.Custom<InputChoiceState, InputChoiceResult<A> | null, Terminal.Size>(
-            { text: "", selected: options.selected === undefined || options.selected < 0 ? null : options.selected }, resized, {
+            { text: "", selected: options.selected === undefined || options.selected < 0 ? null : options.selected }, yield* resizeEvents, {
             render: (state, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
               const columns = yield* terminal.columns
               const rows = yield* terminal.rows
               const view = activeView
-              if (view) yield* Queue.offer(fitRequests, { view, columns, rows, editing: true })
-              const editor = renderInputChoice(options.message, state, options.choices, columns, rows, !process.env.NO_COLOR, options.selectionOnly)
+              const editor = renderInputChoice(state, options.choices, columns, rows, !process.env.NO_COLOR, options.selectionOnly, Math.max(2, rows - 14) - (view?.error ? 1 : 0))
               if (!view) return ""
-              return `\x1b[H\x1b[2J${renderFormFrame(view, focused, true, columns, rows)}${editor}`
+              return `\x1b[H\x1b[2J${renderFormFrame(view, focused, columns, rows, !process.env.NO_COLOR, { editor: { title: options.message, lines: editor }, detailOffset })}`
             }),
             clear: () => Effect.succeed(""),
-            process: (event, state) => Effect.succeed<PromptAction<InputChoiceState, InputChoiceResult<A> | null>>(
-              event._tag === "Event" ? { _tag: "NextFrame", state }
-                : advanceInputChoice(state, event.input, options.choices, options.selectionOnly))
+            process: (event, state) => {
+              if (event._tag !== "Event" && (event.input.key.name === "pageup" || event.input.key.name === "pagedown")) {
+                detailOffset = Math.max(0, detailOffset + (event.input.key.name === "pageup" ? -1 : 1))
+                return Effect.succeed<Prompt.Action<InputChoiceState, InputChoiceResult<A> | null>>({ _tag: "NextFrame", state })
+              }
+              return Effect.succeed<Prompt.Action<InputChoiceState, InputChoiceResult<A> | null>>(
+                event._tag === "Event" ? { _tag: "NextFrame", state }
+                  : advanceInputChoice(state, event.input, options.choices, options.selectionOnly))
+            }
           }
           ))
           return result === null ? yield* Effect.fail(new Terminal.QuitError({})) : result
@@ -434,18 +406,27 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           return yield* Effect.fail(new AppError({ message: "Project directory changed; select the exact project directory again" }))
         return inspected.success
       })
+      const useProject = (found: { project: Repository; checkout: Repository; worktrees: readonly Worktree[] }) => {
+        draft = changeProject(draft, found.project)
+        if (found.checkout.vcs === "jj" && !draft.sourcePath) draft = { ...draft, sourcePath: found.checkout.path }
+        if (!draft.destination) {
+          const tree = found.worktrees.find(item => item.path === found.checkout.path &&
+            (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
+          if (tree) draft = selectWorktree(draft, tree)
+        }
+      }
       const activate = Effect.fnUntraced(function*(machine: Machine, showLoading = false) {
         const previous = draft
         const previousHostId = draft.host?.hostId
         draft = { machine, projectChoice: draft.projectChoice, mode: draft.mode }
-        sessions = []; plan = undefined; clonePlan = undefined; cloneRoot = ""; cloneRoots = []
+        sessions = []; cloneRoot = ""; cloneRoots = []
         error = undefined
         const discoveredContext = machine.local ? contextPath : undefined
         contextPath = undefined
         if (showLoading) {
           const pending = { ...formView(true), notice: `Connecting to ${machine.label}…` }
           activeView = pending
-          yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(pending, "machine", false, yield* terminal.columns, yield* terminal.rows)}`)
+          yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(pending, "machine", yield* terminal.columns, yield* terminal.rows)}`)
         }
         const connected = yield* Effect.result(connectAndDiscover(machine, command, discoveredContext))
         if (Result.isFailure(connected)) {
@@ -471,32 +452,15 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (!draft.projectChoice && found.checkout && discoveredContext) {
           const inspected = yield* Effect.result(inspectProject(host, command, found.checkout.path))
           if (Result.isFailure(inspected)) { error = problem(inspected.failure); return }
-          if (Result.isSuccess(inspected)) {
-            draft = changeProjectChoice(draft,
-              known(host, inspected.success.project, inspected.success.checkout))
-            draft = changeProject(draft, inspected.success.project)
-            if (inspected.success.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.success.checkout.path }
-            const tree = inspected.success.worktrees.find(item => item.path === found.checkout?.path &&
-              (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
-            if (tree) draft = selectWorktree(draft, tree)
-          }
+          draft = changeProjectChoice(draft, known(host, inspected.success.project, inspected.success.checkout))
+          useProject(inspected.success)
         } else if (draft.projectChoice) {
           const inspected = yield* Effect.result(bindProject(draft.projectChoice, host, found.projects))
           if (Result.isFailure(inspected)) {
             if (!Terminal.isQuitError(inspected.failure)) error = problem(inspected.failure)
             return
           }
-          if (inspected.success) {
-            draft = changeProject(draft, inspected.success.project)
-            if (inspected.success.checkout.vcs === "jj" && !draft.sourcePath)
-              draft = { ...draft, sourcePath: inspected.success.checkout.path }
-            if (!draft.destination) {
-              const checkoutPath = inspected.success.checkout.path
-              const tree = inspected.success.worktrees.find(item => item.path === checkoutPath &&
-                (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
-              if (tree) draft = selectWorktree(draft, tree)
-            }
-          }
+          if (inspected.success) useProject(inspected.success)
         }
         error = undefined
 
@@ -540,31 +504,24 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           id: "mode", label: "Mode", value: draft.mode === "auto" ? "Reuse matching tab, otherwise new tab"
             : draft.mode === "new-tab" ? "Always new tab" : "Split matching tab, otherwise new tab", disabled: !draft.host
         })
-        const awaitingConfirmation = !!(clonePlan || plan)
         return {
           rows: rows.map(row => ({ ...row, disabled: initializing || row.disabled })),
-          submitLabel: clonePlan?.label ?? plan?.label ?? (draft.clone ? "Clone & Open" :
-            draft.destination?.path ? "Open checkout" : draft.project?.vcs === "jj" ? "Create workspace & open" : "Create checkout & open"),
-          submitDisabled: initializing || !draft.host || !(cloneInputFor(draft) || inputFor(draft)),
-          notice: [awaitingConfirmation ? "Review this action; submit again to launch" : draft.clone ? "Only pushed history transfers" : undefined,
-          clonePlan?.warning, plan?.warning,
-          plan ? `Destination: ${plan.path}` : undefined,
-          clonePlan && clonePlan.repo !== draft.clone?.repo ? `Changed destination: ${clonePlan.repo}` : undefined,
-          clonePlan?.detail,
-          clonePlan?.vcs === "jj" ? `Start from: ${draft.destination?.revision ? `${draft.destination.label} (${draft.destination.revision})` : "cloned default"}` : undefined,
-          plan?.detail].filter(Boolean).join(" · ") || undefined,
+          submitLabel: draft.clone ? "Clone & Open" :
+            draft.destination?.path ? "Open checkout" : draft.project?.vcs === "jj" ? "Create workspace & open" : "Create checkout & open",
+          submitDisabled: initializing || blocked || !draft.host || !(cloneInputFor(draft) || inputFor(draft)),
+          notice: draft.clone ? "Only pushed history transfers" : undefined,
           error: initializing ? undefined : error ?? (!draft.projectChoice ? "Select a project" : !draft.machine ? "Select a Rex machine"
             : !draft.host ? "Connect to the selected machine and install its worktrees helper if missing"
               : !(draft.project || draft.clone) ? "Select the exact project directory on this machine"
                 : !draft.destination && draft.project?.vcs !== "jj" && draft.clone?.vcs !== "jj" ? "Select a branch"
                   : draft.project?.vcs === "jj" && (!draft.worktreeName && !draft.destination?.path || !!draft.worktreeName && !draft.destination?.revision)
                     ? "Choose an existing workspace or a new workspace name and starting revision"
-                    : !draft.session ? "Choose an existing Rex session or type a new name" : undefined),
-          fitWarning: activeView?.fitWarning
+                    : !draft.session ? "Choose an existing Rex session or type a new name" : undefined)
         }
       }
-      const initialView = formView(true)
+      const initialView = { ...formView(true), notice: "Discovering projects and Rex sessions…" }
       activeView = initialView
+      yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(initialView, "project", yield* terminal.columns, yield* terminal.rows)}`)
       const initialize = Effect.gen(function*() {
         contextPath = yield* context
         yield* loadMachines
@@ -588,17 +545,12 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
           if (!draft.host || !(cloneInput || inputFor(draft))) continue
           if (cloneInput) {
             const current = yield* Effect.result(reviewClone(draft.host, command, cloneInput))
-            if (Result.isFailure(current)) { error = problem(current.failure); clonePlan = undefined; continue }
-            if (clonePlan && (!sameClonePlan(current.success, clonePlan) || current.success.warning !== clonePlan.warning)) {
-              error = `Clone destination or Rex target changed; review the updated URL and destination before submitting again. Destination: ${current.success.repo}`
-              clonePlan = current.success
-              continue
-            }
-            const wasReviewed = !!clonePlan
-            clonePlan = current.success
-            if (!wasReviewed && (clonePlan.warning || safeDisplayText(clonePlan.repo) !== clonePlan.repo ||
-              view.fitWarning || naturalFormRows(view, yield* terminal.columns) + 1 > (yield* terminal.rows))) {
-              error = undefined
+            if (Result.isFailure(current)) { error = problem(current.failure); continue }
+            const clonePlan = current.success
+            if (clonePlan.repo !== cloneInput.repo || clonePlan.hostId !== draft.host.hostId) {
+              error = clonePlan.hostId !== draft.host.hostId ? "Rex target changed; select the machine again"
+                : `Clone destination changed; edit the destination: ${clonePlan.repo}`
+              blocked = true
               continue
             }
             const launched = yield* Effect.result(submitClone(draft.host, command, cloneInput, clonePlan))
@@ -606,30 +558,24 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
               launchAcknowledged = true
               yield* acknowledge("Clone needs inspection",
                 [problem(launched.failure), `Destination: ${clonePlan.repo}`,
-                  "A clone or Rex tab may already exist. Inspect the destination and session before opening again."], "error")
+                  "A clone or Rex tab may already exist. Inspect the destination and session before opening again."], "error", view)
               return yield* Effect.fail(launched.failure)
             }
             if (launched.success.warning) yield* acknowledge("Clone task submitted with warning",
               [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.repo}`,
                 "The clone task was created; Rex may not have focused its tab. Inspect the session before opening again.",
-              launched.success.warning], "warning")
+              launched.success.warning], "warning", view)
             return
           }
           const input = inputFor(draft)
           if (!input) continue
           const current = yield* Effect.result(review(draft.host, command, input))
-          if (Result.isFailure(current)) { error = problem(current.failure); plan = undefined; continue }
-          if (plan && (!sameLaunchPlan(current.success, plan) || current.success.warning !== plan.warning)) {
-            error = `Destination or Rex target changed; review the updated action before submitting again. Destination: ${current.success.path}`
-            plan = current.success
-            continue
-          }
-          const wasReviewed = !!plan
-          const changedPath = !wasReviewed && !!input.path && current.success.path !== input.path
-          plan = current.success
-          if (!wasReviewed && (changedPath || plan.warning || safeDisplayText(plan.path) !== plan.path ||
-            view.fitWarning || naturalFormRows(view, yield* terminal.columns) + 1 > (yield* terminal.rows))) {
-            error = changedPath ? `Destination or Rex target changed; review the updated action before submitting again. Destination: ${plan.path}` : undefined
+          if (Result.isFailure(current)) { error = problem(current.failure); continue }
+          const plan = current.success
+          if (plan.hostId !== draft.host.hostId || input.path && plan.path !== input.path) {
+            error = plan.hostId !== draft.host.hostId ? "Rex target changed; select the machine again"
+              : `Destination changed; select the checkout again: ${plan.path}`
+            blocked = true
             continue
           }
           const launched = yield* Effect.result(submit(draft.host, command, input, plan))
@@ -637,14 +583,14 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             launchAcknowledged = true
             yield* acknowledge("Launch needs inspection",
               [problem(launched.failure), `Destination: ${plan.path}`,
-                "The checkout or Rex tab may already have changed. Inspect the session before opening again."], "error")
+                "The checkout or Rex tab may already have changed. Inspect the session before opening again."], "error", view)
             return yield* Effect.fail(launched.failure)
           }
           if (launched.success.warning || plan.warning) yield* acknowledge("Opened with warning",
             [`Session: ${launched.success.sessionId}`, `Destination: ${launched.success.path}`,
             `Action: ${launched.success.action}`, launched.success.pending
               ? `Task submitted; ${plan.vcs === "jj" ? "JJ" : "Git"} setup may still be running.` : "Existing task focused.",
-            ...new Set([plan.warning, launched.success.warning].filter((line): line is string => !!line))], "warning")
+            ...new Set([plan.warning, launched.success.warning].filter((line): line is string => !!line))], "warning", view)
           return
         }
         if (view.rows.find(row => row.id === action)?.disabled) continue
@@ -673,24 +619,15 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             if (!choice.name) return yield* Effect.fail(new AppError({ message: "Project name is required" }))
             const host = draft.host
             if (host) {
-              const found = yield* discover(host, command)
-              cloneRoots = found.roots
-              const inspected = yield* bindProject(choice, host, found.projects)
+              const available = projects.flatMap(item => item.source?.machineKey === host.key && item.source.hostId === host.hostId
+                ? [item.source.repository] : [])
+              const inspected = yield* bindProject(choice, host, available)
               if (inspected) {
                 draft = changeProjectChoice(draft, choice)
-                draft = changeProject(draft, inspected.project)
-                if (inspected.checkout.vcs === "jj") draft = { ...draft, sourcePath: inspected.checkout.path }
-                const tree = inspected.worktrees.find(item => item.path === inspected.checkout.path &&
-                  (item.vcs === "jj" ? item.present : !item.bare && !item.prunable))
-                if (tree) draft = selectWorktree(draft, tree)
+                useProject(inspected)
+                if (!available.some(repo => repo.vcs === inspected.project.vcs && repo.commonDir === inspected.project.commonDir))
+                  projects.push(known(host, inspected.project, inspected.checkout))
               }
-              projects = [...projects.filter(item => item.source?.machineKey !== host.key ||
-                item.source.hostId !== host.hostId),
-              ...found.projects.map(repo => known(host, repo, found.checkout))]
-              sessions = found.sessions
-              if (draft.session?.kind === "existing" && !sessions.some(item => item.id === (draft.session?.kind === "existing" ? draft.session.id : undefined)))
-                draft = { ...draft, session: sessions.length === 1 ? { kind: "existing", id: sessions[0]!.id } : undefined }
-              draft = { ...draft, clientId: focusClient(found.clients) }
             } else draft = changeProjectChoice(draft, choice)
           } else if (action === "destination") {
             if (!draft.host || !(draft.project || draft.clone)) return yield* Effect.fail(new AppError({ message: "Select a project and machine before choosing a worktree" }))
@@ -746,8 +683,6 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
                   draft = existing ? selectWorktree(draft, existing)
                     : changeDestination(draft, { branch, label: branch }, draft.worktreeName)
                 } else {
-                  if (picked.value.vcs === "jj" && (!picked.value.present || !picked.value.path))
-                    return yield* Effect.fail(new AppError({ message: `Workspace ${picked.value.name} is unavailable; inspect its registered location before opening` }))
                   draft = selectWorktree(draft, picked.value)
                 }
               } else {
@@ -833,7 +768,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
             }
           } else if (action === "session") {
             if (!draft.host) return yield* Effect.fail(new AppError({ message: "Select a machine before choosing a session" }))
-            const found = yield* discover(draft.host, command)
+            const found = yield* inspectSessions(draft.host, command)
             sessions = found.sessions
             draft = { ...draft, clientId: focusClient(found.clients) }
             const picked = yield* inputChoice({
@@ -854,8 +789,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (Result.isFailure(editing)) {
           if (!Terminal.isQuitError(editing.failure)) error = problem(editing.failure)
         } else {
-          plan = undefined
-          clonePlan = undefined
+          blocked = false
         }
       }
     }).pipe(Effect.catchCause(cause => Cause.hasInterrupts(cause) || launchAcknowledged

@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Schema } from "effect"
 import { AppError, JjWorktreeSchema, ServerHostIdSchema, type Environment } from "../src/contracts.ts"
-import { cloneRepository, cloneSource, createWorkspace, listRevisions, listWorkspaces, newChange, planWorkspace, project, repository, resolveRevision } from "../src/jj.ts"
+import { cloneRepository, cloneSource, createWorkspace, listRevisions, listWorkspaces, newChange, planWorkspace, project, repository, resolveRevision, withToolValidation } from "../src/jj.ts"
 
 function command(program: string, args: string[], cwd?: string) {
   const env: Environment = {}
@@ -112,6 +112,7 @@ it.live("root, missing, ambiguous, and conflicted JJ trunk cannot become mainlin
 it.live("JJ metadata with unavailable binary reports installation error, not missing repository", () => fixture(root => Effect.gen(function*() {
   const repo = join(root, "project")
   command("jj", ["git", "init", repo])
+  expect((yield* withToolValidation(repository(repo))).path).toBe(repo)
   yield* Effect.promise(() => mkdir(join(root, "empty-path")))
   const error = yield* Effect.acquireUseRelease(
     Effect.sync(() => {
@@ -119,7 +120,7 @@ it.live("JJ metadata with unavailable binary reports installation error, not mis
       process.env.PATH = join(root, "empty-path")
       return previous
     }),
-    () => Effect.flip(repository(repo)),
+    () => Effect.flip(withToolValidation(repository(repo))),
     previous => Effect.sync(() => {
       if (previous === undefined) delete process.env.PATH
       else process.env.PATH = previous
