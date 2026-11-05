@@ -795,5 +795,10 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
     }).pipe(Effect.catchCause(cause => Cause.hasInterrupts(cause) || launchAcknowledged
       ? Effect.failCause(cause)
       : acknowledge("Could not open worktrees", [Cause.pretty(cause)], "error")
-        .pipe(Effect.andThen(Effect.failCause(cause)))))
+        .pipe(Effect.andThen(Effect.failCause(cause)))),
+      Effect.provideServiceEffect(Terminal.Terminal, Effect.gen(function*() {
+        const terminal = yield* Terminal.Terminal
+        const input = yield* terminal.readInput
+        return { ...terminal, readInput: Effect.succeed(input) }
+      })))
   }))
