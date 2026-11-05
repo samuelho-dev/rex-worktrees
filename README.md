@@ -102,6 +102,8 @@ Source-build setup installs to `~/.local/bin/rex-worktrees`. To uninstall, remov
 
 Releases publish the tested macOS archive to npm through GitHub Actions OIDC, then verify registry version and tarball integrity. The npm trusted publisher must authorize `samuelho-dev/rex-worktrees`, workflow `release.yml`, for direct publishing; no npm token is used. Tag a matching package version (`vX.Y.Z`) to release.
 
+Registry verification allows up to 120 checks, ten seconds apart, for npm processing. Publishing is not retried; an integrity mismatch still fails the release.
+
 ## License
 
 [MIT](LICENSE). Standalone builds embed Bun; see [third-party notices](licenses/THIRD-PARTY-NOTICES).
