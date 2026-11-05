@@ -100,6 +100,8 @@ rex config reload
 
 Source-build setup installs to `~/.local/bin/rex-worktrees`. To uninstall, remove the `BEGIN rex-worktrees` / `END rex-worktrees` section and adjacent `rex-worktrees.lua` from your active Rex config (`rex config check --json`), remove the executable, and reload. Repositories are retained.
 
+Releases publish the tested macOS archive to npm through GitHub Actions OIDC, then verify registry version and tarball integrity. The npm trusted publisher must authorize `samuelho-dev/rex-worktrees`, workflow `release.yml`, for direct publishing; no npm token is used. Tag a matching package version (`vX.Y.Z`) to release.
+
 ## License
 
 [MIT](LICENSE). Standalone builds embed Bun; see [third-party notices](licenses/THIRD-PARTY-NOTICES).
