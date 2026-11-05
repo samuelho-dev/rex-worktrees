@@ -43,7 +43,7 @@ const currentForm = (output: string, text: string | RegExp, from: number) => {
   const start = output.lastIndexOf("\x1b[H\x1b[2J");
   if (start < from) return undefined;
   const frame = output.slice(start);
-  return frame.includes("└") && frame.includes("Tab next") &&
+  return /\n└─*┘/.test(frame) && frame.includes("Tab next") &&
     (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
 };
 
@@ -178,7 +178,7 @@ async function withPopup(
     const start = output.lastIndexOf("\x1b[H\x1b[2J");
     if (start < from) return undefined;
     const frame = output.slice(start);
-    return frame.includes("Esc back") &&
+    return /\n└─*┘/.test(frame) && frame.includes("Esc back") &&
       (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
   };
   try {
@@ -335,6 +335,7 @@ it("a complete native PTY form survives fragmented UTF-8 and the next partial re
 
     const bytes = new TextEncoder().encode(frame);
     const border = bytes.indexOf(0xe2);
+    const closingBorder = new TextEncoder().encode(frame.slice(0, frame.lastIndexOf("┘"))).length;
     expect(border).toBeGreaterThan(0);
     const decoder = new TextDecoder();
     let observed = "";
@@ -343,10 +344,13 @@ it("a complete native PTY form survives fragmented UTF-8 and the next partial re
       () => currentForm(observed, /CHECKOUT\s+alpha/, 0),
       (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
     );
-    for (const chunk of [bytes.subarray(0, border + 1), bytes.subarray(border + 1)]) {
+    for (const chunk of [bytes.subarray(0, border + 1), bytes.subarray(border + 1, closingBorder + 1)]) {
       observed += decoder.decode(chunk, { stream: true });
       for (const notify of listeners) notify();
+      expect(currentForm(observed, /CHECKOUT\s+alpha/, 0)).toBeUndefined();
     }
+    observed += decoder.decode(bytes.subarray(closingBorder + 1), { stream: true });
+    for (const notify of listeners) notify();
     // ponytail: replay only the PTY chunk boundary, not a second synthetic UI.
     observed += "\x1b[H\x1b[2J┌";
     for (const notify of listeners) notify();
