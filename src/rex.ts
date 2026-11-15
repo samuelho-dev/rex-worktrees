@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { Cause, Context, Effect, Path, Schema } from "effect";
-import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin } from "./contracts.ts";
+import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, RexLayoutNode, RexTerminalSizeSchema, popupSize, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin } from "./contracts.ts";
 import { run } from "./process.ts";
 const localName = hostname().toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
 export const localDirectoryUri = (raw: string): string | undefined => {
@@ -152,6 +152,10 @@ export const focus = Effect.fnUntraced(function*(sessionId: SessionId, windowId:
   return warnings.length ? warnings.join("; ") : undefined;
 });
 
+const findPane = (node: RexLayoutNode | null, blockId: BlockId): RexLayoutNode | undefined =>
+  !node ? undefined : node.block_id === blockId ? node
+    : node.split ? findPane(node.split.before, blockId) ?? findPane(node.split.after, blockId) : undefined;
+
 export const openPopup = Effect.fnUntraced(function*(command: readonly string[], sessionId: SessionId, origin: PopupOrigin = {}) {
   const path = yield* Path.Path;
   const endpoint = (yield* localIdentity).endpoint;
@@ -163,7 +167,8 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
     window.layers.some(layer => layer.blocks.some(block => block.block_id === origin.blockId))) : undefined;
   if (origin.blockId && !source) return yield* Effect.fail(new AppError({ message: "Source pane is no longer in the selected Rex session" }));
   const windowId = source?.window_id ?? view.active_window_id;
-  if (!windowId || !view.windows.some(window => window.window_id === windowId)) {
+  const window = view.windows.find(window => window.window_id === windowId);
+  if (!windowId || !window) {
     return yield* Effect.fail(new AppError({ message: "No active Rex window for the popup" }));
   }
   const sourceOwner = source?.layers.flatMap(layer => layer.blocks).find(block => block.block_id === origin.blockId)?.owner;
@@ -171,11 +176,25 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
     .filter(client => client.info?.kind === "app" && client.connection_state === "connected");
   const clientId = [sourceOwner, origin.clientId].find(id => id && clients.some(client => client.client_id === id));
   const popupCommand = clientId ? [...command, "--managed-popup", "--origin-client", clientId] : [...command, "--managed-popup"];
-  const width = 0.68, height = 0.24; // Fixed bounds for the entire popup lifetime.
+  const blocks = window.layers.flatMap(layer => layer.blocks);
+  const terminals = blocks.filter(block => block.flavor === "com.superlogical.terminal.shell");
+  const terminal = terminals.find(block => block.block_id === origin.blockId)
+    ?? terminals.find(block => block.block_id === window.focused_block_id) ?? terminals[0];
+  // Without terminal geometry, use the available window instead of guessing a percentage.
+  let width = 1, height = 1;
+  if (terminal) {
+    const pane = window.layers.map(layer => findPane(layer.layout, terminal.block_id)).find(node => node !== undefined);
+    if (!pane) return yield* Effect.fail(new AppError({ message: "Rex terminal geometry changed before opening the popup" }));
+    const size = yield* parse(RexTerminalSizeSchema, yield* localRex(["block", "call", "-s", sessionId, "-b", terminal.block_id, "size"]));
+    const zoomed = window.zoomed_block_id === terminal.block_id;
+    // Native title-bar chrome needs one more row than the side insets.
+    width = Math.min(1, (popupSize.columns + 2) * (zoomed ? 1 : pane.rect[2]) / size.columns);
+    height = Math.min(1, (popupSize.rows + 3) * (zoomed ? 1 : pane.rect[3]) / size.rows);
+  }
   const args = {
     session_id: sessionId, window_id: windowId,
     bounds: [(1 - width) / 2, (1 - height) / 2, width, height],
-    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), exit: { on_completion: true } } } }, focus: true
+    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), size: popupSize, exit: { on_completion: true } } } }, focus: true
   };
   const created = yield* parse(RexLayerSchema, yield* localRex(["api", "call", "-s", sessionId, "session.new_layer", JSON.stringify(args)]));
   if (!created.layer_id || !created.block_ids?.some(Boolean)) return yield* Effect.fail(new AppError({ message: "Rex did not return a floating terminal layer" }));
