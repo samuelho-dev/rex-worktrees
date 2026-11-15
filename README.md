@@ -42,6 +42,8 @@ rex do worktrees_open
 
 **Mode** reuses a matching tab by default; choose a new tab or split instead. New Git checkouts can have a custom **Directory** name, separate from the branch.
 
+Shells and interactive Git/JJ clones stay attached to the destination terminal. The shell comes from `$SHELL`, falling back to `/bin/sh`.
+
 | Key | Action |
 | --- | --- |
 | Tab / Shift+Tab | Move between fields and buttons |
