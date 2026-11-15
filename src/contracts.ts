@@ -276,10 +276,26 @@ export const RexWindowsSchema = Schema.Struct({
     layers: Schema.Array(Schema.Struct({ blocks: Schema.optional(Schema.Array(Schema.Struct({ block_id: BlockIdSchema, host_id: ServerHostIdSchema }))) }))
   }))
 })
+export const popupSize = { columns: 80, rows: 16 }
+export const RexTerminalSizeSchema = Schema.Struct({
+  columns: Schema.Int.check(Schema.isGreaterThan(0)), rows: Schema.Int.check(Schema.isGreaterThan(0))
+})
+export class RexLayoutNode extends Schema.Class<RexLayoutNode, { readonly brand: unique symbol }>("RexLayoutNode")({
+  rect: Schema.Tuple([Schema.Finite, Schema.Finite, Schema.Finite, Schema.Finite]),
+  block_id: Schema.optional(Schema.NullOr(BlockIdSchema)),
+  split: Schema.optional(Schema.NullOr(Schema.Struct({
+    before: Schema.suspend((): Schema.Codec<RexLayoutNode, unknown> => RexLayoutNode),
+    after: Schema.suspend((): Schema.Codec<RexLayoutNode, unknown> => RexLayoutNode)
+  })))
+}) {}
 export const RexViewSchema = Schema.Struct({
   active_window_id: Schema.NullOr(WindowIdSchema), windows: Schema.Array(Schema.Struct({
-    window_id: WindowIdSchema, layers: Schema.Array(Schema.Struct({
-      blocks: Schema.Array(Schema.Struct({ block_id: BlockIdSchema, owner: Schema.optional(Schema.NullOr(ClientIdSchema)) }))
+    window_id: WindowIdSchema, focused_block_id: Schema.optional(Schema.NullOr(BlockIdSchema)),
+    zoomed_block_id: Schema.optional(Schema.NullOr(BlockIdSchema)), layers: Schema.Array(Schema.Struct({
+      layout: Schema.NullOr(RexLayoutNode),
+      blocks: Schema.Array(Schema.Struct({
+        block_id: BlockIdSchema, flavor: Schema.String, owner: Schema.optional(Schema.NullOr(ClientIdSchema))
+      }))
     }))
   }))
 })

@@ -42,6 +42,8 @@ rex do worktrees_open
 
 **Mode** reuses a matching tab by default; choose a new tab or split instead. New Git checkouts can have a custom **Directory** name, separate from the branch.
 
+The underlined `REX / WORKTREES` header and fields keep fixed positions; unavailable fields stay disabled. Editors and messages reuse the same details area, so only choice lists and long details scroll.
+
 Shells and interactive Git/JJ clones stay attached to the destination terminal. The shell comes from `$SHELL`, falling back to `/bin/sh`.
 
 | Key | Action |

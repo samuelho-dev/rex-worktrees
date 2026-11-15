@@ -39,11 +39,13 @@ const waitFor = <T>(
   return promise;
 };
 
-const currentForm = (output: string, text: string | RegExp, from: number) => {
+const currentForm = (output: string, text: string | RegExp, from: number, footer = "Tab next") => {
   const start = output.lastIndexOf("\x1b[H\x1b[2J");
   if (start < from) return undefined;
-  const frame = output.slice(start);
-  return /\n└─*┘/.test(frame) && frame.includes("Tab next") &&
+  const end = output.indexOf("\x1b[0J", start);
+  if (end < 0) return undefined;
+  const frame = output.slice(start, end + 4);
+  return frame.includes(footer) &&
     (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
 };
 
@@ -54,6 +56,7 @@ async function withPopup(
     waitForText: (text: string | RegExp, from?: number) => Promise<void>;
     waitForForm: (text: string | RegExp, from?: number) => Promise<string>;
     waitForEditor: (text: string | RegExp, from?: number) => Promise<string>;
+    waitForNotice: (text: string | RegExp, from?: number) => Promise<string>;
     write: (input: string) => void;
     exitCode: () => number | null;
     exited: Promise<number>;
@@ -162,7 +165,7 @@ async function withPopup(
     env,
     terminal: {
       cols: kind === "long" ? 60 : 96,
-      rows: kind === "long" ? 18 : kind === "edit" || kind === "connect" ? 16 : 24,
+      rows: 16,
       data: (_, bytes) => {
         output += decoder.decode(bytes, { stream: true });
         for (const listener of listeners) listener();
@@ -173,13 +176,6 @@ async function withPopup(
   const listen = (notify: () => void) => {
     listeners.add(notify);
     return () => { listeners.delete(notify); };
-  };
-  const currentEditor = (text: string | RegExp, from: number) => {
-    const start = output.lastIndexOf("\x1b[H\x1b[2J");
-    if (start < from) return undefined;
-    const frame = output.slice(start);
-    return /\n└─*┘/.test(frame) && frame.includes("Esc back") &&
-      (typeof text === "string" ? frame.includes(text) : text.test(frame)) ? frame : undefined;
   };
   try {
     await run({
@@ -194,7 +190,11 @@ async function withPopup(
       },
       waitForEditor: (text, from = 0) => {
         awaiting = `complete editor ${String(text)} after ${from}`;
-        return waitFor(() => currentEditor(text, from), listen);
+        return waitFor(() => currentForm(output, text, from, "Esc back"), listen);
+      },
+      waitForNotice: (text, from = 0) => {
+        awaiting = `complete notice ${String(text)} after ${from}`;
+        return waitFor(() => currentForm(output, text, from, "Enter / Space close"), listen);
       },
       write: (input) => proc.terminal!.write(input),
       exitCode: () => proc.exitCode,
@@ -334,9 +334,9 @@ it("a complete native PTY form survives fragmented UTF-8 and the next partial re
     expect(await pty.exited).toBe(0);
 
     const bytes = new TextEncoder().encode(frame);
-    const border = bytes.indexOf(0xe2);
-    const closingBorder = new TextEncoder().encode(frame.slice(0, frame.lastIndexOf("┘"))).length;
-    expect(border).toBeGreaterThan(0);
+    const glyph = bytes.indexOf(0xe2);
+    const frameEnd = new TextEncoder().encode(frame.slice(0, frame.lastIndexOf("\x1b[0J"))).length;
+    expect(glyph).toBeGreaterThan(0);
     const decoder = new TextDecoder();
     let observed = "";
     const listeners = new Set<() => void>();
@@ -344,27 +344,27 @@ it("a complete native PTY form survives fragmented UTF-8 and the next partial re
       () => currentForm(observed, /CHECKOUT\s+alpha/, 0),
       (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
     );
-    for (const chunk of [bytes.subarray(0, border + 1), bytes.subarray(border + 1, closingBorder + 1)]) {
+    for (const chunk of [bytes.subarray(0, glyph + 1), bytes.subarray(glyph + 1, frameEnd + 2)]) {
       observed += decoder.decode(chunk, { stream: true });
       for (const notify of listeners) notify();
       expect(currentForm(observed, /CHECKOUT\s+alpha/, 0)).toBeUndefined();
     }
-    observed += decoder.decode(bytes.subarray(closingBorder + 1), { stream: true });
+    observed += decoder.decode(bytes.subarray(frameEnd + 2), { stream: true });
     for (const notify of listeners) notify();
     // ponytail: replay only the PTY chunk boundary, not a second synthetic UI.
-    observed += "\x1b[H\x1b[2J┌";
+    observed += "\x1b[H\x1b[2J›";
     for (const notify of listeners) notify();
     expect(currentForm(observed, /CHECKOUT\s+alpha/, 0)).toBeUndefined();
     expect(await captured).toBe(frame);
   });
 }, 8000);
 
-it("typed Git branch shows an independent directory row and launches on one submit", async () => {
+it("typed Git branch enables its fixed directory slot without moving fields", async () => {
   await withPopup("edit", async (pty) => {
     const initial = await pty.waitForForm(/CHECKOUT\s+alpha/);
     expect(initial).toContain("MODE");
     expect(initial).not.toContain("OPTIONS");
-    expect(initial).not.toContain("  DIRECTORY  ");
+    expect(initial).toMatch(/DIRECTORY\s+—/);
     pty.write("\t\t\r");
     await pty.waitForEditor("Checkout (");
     const beforeBranch = pty.output().length;
@@ -372,9 +372,13 @@ it("typed Git branch shows an independent directory row and launches on one subm
     const branchFrame = await pty.waitForForm(/CHECKOUT\s+feature\/free/, beforeBranch);
     expect(branchFrame).toMatch(/CHECKOUT\s+feature\/free/);
     expect(branchFrame).toMatch(/DIRECTORY\s+Default/);
+    for (const label of ["PROJECT", "MACHINE", "CHECKOUT", "DIRECTORY", "SESSION", "MODE"]) {
+      const position = (frame: string) => Bun.stripANSI(frame).replace(/\r/g, "").split("\n").findIndex(line => line.includes(label));
+      expect(position(branchFrame)).toBe(position(initial));
+    }
     expect(branchFrame).not.toContain("OPTIONS");
     expect(pty.output()).not.toContain("LAUNCH_CALLED");
-    pty.write("\t\t\r");
+    pty.write("\t\r");
     await pty.waitForEditor("Optional custom checkout directory name");
     const beforeDirectory = pty.output().length;
     pty.write("custom-tree\r");
@@ -424,7 +428,7 @@ it("a new JJ workspace retains its name and launches on one submit with the sele
     pty.write("task-space\r");
     const namedFrame = await pty.waitForForm(/WORKSPACE\s+task-space/, beforeName);
     expect(namedFrame).toContain("START FROM");
-    pty.write("\t\t\r");
+    pty.write("\t\r");
     await pty.waitForText("Start from revision for new workspace");
     const beforeRevision = pty.output().length;
     pty.write("candidate\x1b[B\r");
@@ -447,14 +451,14 @@ it("a detached clone exposes required Branch in the flat form", async () => {
     pty.write("\x1b[B\r");
     const cloneFrame = await pty.waitForForm(/CLONE TO\s+\/clones\/alpha/);
     expect(cloneFrame).toMatch(/BRANCH\s+Select or type branch/);
-    expect(cloneFrame).not.toContain("MODE");
+    expect(cloneFrame).toMatch(/MODE\s+—/);
     expect(cloneFrame).not.toContain("OPTIONS");
     pty.write("\t\r");
     await pty.waitForText("Clone to (absolute destination");
     const beforeDestination = pty.output().length;
     pty.write("/safe/alpha\r");
     await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
-    pty.write("\t\t\r");
+    pty.write("\t\r");
     await pty.waitForText("Branch (select source branch");
     const beforeBranch = pty.output().length;
     pty.write("\x1b[B\r");
@@ -490,7 +494,7 @@ it("clone path editor cannot launch; optional checkout name remains independent"
     await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
     expect(pty.output()).not.toContain("REVIEW_CLONE");
     expect(pty.output()).not.toContain("CLONE_LAUNCHED");
-    pty.write("\t\t\t\r");
+    pty.write("\t\t\r");
     await pty.waitForEditor("Optional custom checkout directory name");
     const beforeName = pty.output().length;
     pty.write("separate-checkout\r");
@@ -559,11 +563,11 @@ it("clone launch errors show subprocess diagnostics instead of hiding them behin
     pty.write("/safe/alpha\r");
     await pty.waitForForm(/CLONE TO\s+\/safe\/alpha/, beforeDestination);
     pty.write("\x13");
-    await pty.waitForText("Clone needs inspection");
-    const frame = pty.output().slice(pty.output().lastIndexOf("\x1b[H\x1b[2J"));
-    expect(frame).toContain("Destination request rejected");
-    expect(frame).toContain("exited 4");
-    expect(frame).toContain("Destination: /safe/alpha");
+    const frame = await pty.waitForNotice("Clone needs inspection");
+    const diagnostic = Bun.stripANSI(frame).split("\n").slice(10, 15).map(line => line.replace(/\r/g, "").trim()).join(" ");
+    expect(diagnostic).toContain("Destination request rejected");
+    expect(diagnostic).toContain("exited 4");
+    expect(frame).toMatch(/CLONE TO\s+\/safe\/alpha/);
     expect(frame).not.toContain("request-body-");
     expect(pty.exitCode()).toBeNull();
     pty.write("\r");
@@ -638,11 +642,11 @@ it("switch paints the selected machine with no actionable old destination while 
   });
 }, 8000);
 
-it("startup, editor, and error keep the same 16-row frame", async () => {
+it("startup, editor, and error keep the same fixed field and footer coordinates", async () => {
   await withPopup("connect", async (pty) => {
     await pty.waitForForm(/CHECKOUT\s+alpha/);
     const firstPaint = pty.output().split("\x1b[H\x1b[2J").find(frame => frame.includes("Discovering projects"))!;
-    const startup = firstPaint.slice(0, firstPaint.indexOf("┘") + 1);
+    const startup = firstPaint.slice(0, firstPaint.indexOf("\x1b[0J") + 4);
     pty.write("\t\r");
     const editor = await pty.waitForEditor("Execution machine");
     const before = pty.output().length;
@@ -652,13 +656,14 @@ it("startup, editor, and error keep the same 16-row frame", async () => {
     const frames = [startup, editor, error].map(lines);
     for (const frame of frames) {
       expect(frame).toHaveLength(16);
-      expect(frame[0]).toMatch(/^┌.*┐$/);
-      expect(frame[15]).toMatch(/^└.*┘$/);
-      expect(frame[14]).toContain(frame === frames[1] ? "Esc back" : "Tab next");
+      expect(frame[0]?.trimEnd()).toBe("REX / WORKTREES");
+      expect(frame[1]).toMatch(/^─+$/);
+      expect(frame[2]).toContain("PROJECT");
+      expect(frame[15]).toContain(frame === frames[1] ? "Esc back" : "Tab next");
     }
-    for (const label of ["PROJECT", "MACHINE"]) {
+    for (const label of ["PROJECT", "MACHINE", "CHECKOUT", "BRANCH", "DIRECTORY", "SESSION", "MODE"]) {
       const positions = frames.map((frame) => frame.findIndex((line) => line.includes(label)));
-      expect(positions[0]).toBeGreaterThan(0);
+      expect(positions[0]).toBeGreaterThanOrEqual(0);
       expect(positions).toEqual([positions[0], positions[0], positions[0]]);
     }
     pty.write("\x1b");

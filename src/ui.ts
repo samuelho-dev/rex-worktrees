@@ -1,7 +1,7 @@
 import { Cause, Effect, Option, Queue, Result, Scope, Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { connectAndDiscover, connectMachine, inspectSessions, inspectProject, inspectRevision, inspectWorktrees, listMachines, review, reviewClone, sourceForClone, submit, submitClone } from "./client.ts"
-import { AppError, type ClientTarget, type CloneInput, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
+import { AppError, popupSize, type ClientTarget, type CloneInput, type Color, type Destination, type DestinationHost, type Draft, type FormField, type FormRow, type FormView, type InputChoice, type InputChoiceOptions, type InputChoiceResult, type InputChoiceState, type JjRevision, type JjRevisionChoice, type LaunchInput, type Machine, type NoticeTone, type PopupOrigin, type ProjectChoice, type Repository, type SessionTarget, type Worktree } from "./contracts.ts"
 
 const codes: Record<Color, string> = { cyan: "\x1b[36m", amber: "\x1b[33m", muted: "\x1b[90m", red: "\x1b[31m", bold: "\x1b[1m" }
 const color = (text: string, tone: Color, enabled: boolean) => enabled ? `${codes[tone]}${text}\x1b[0m` : text
@@ -13,58 +13,56 @@ const safeDisplayText = (text: string, preserveWhitespace = false) => {
 const fit = (text: string, width: number) => Bun.stringWidth(text) > width ? Bun.sliceAnsi(text, 0, Math.max(0, width), { ellipsis: "…" }) : text
 const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width - Bun.stringWidth(text)))
 
-/** Every state uses the same compact field viewport, detail dock, and footer. */
+const formRows: readonly FormRow[] = [
+  { id: "project", label: "Project", value: "—", disabled: true },
+  { id: "machine", label: "Machine", value: "—", disabled: true },
+  { id: "destination", label: "Checkout", value: "—", disabled: true },
+  { id: "branch", label: "Branch", value: "—", disabled: true },
+  { id: "checkoutName", label: "Directory", value: "—", disabled: true },
+  { id: "session", label: "Session", value: "—", disabled: true },
+  { id: "mode", label: "Mode", value: "—", disabled: true }
+]
+const choiceCount = popupSize.rows - formRows.length - 6
+
+/** Every state keeps the same field slots, editor dock, and footer coordinates. */
 export const renderFormFrame = (view: FormView, focused: FormField, columns: number, rows: number, colors = !process.env.NO_COLOR,
   options: { readonly editor?: { readonly title: string; readonly lines: readonly string[] }; readonly detailOffset?: number; readonly footer?: string } = {}): string => {
   const width = Math.max(2, columns)
-  const inside = width - 2
+  if (rows < popupSize.rows) return fit(`Rex Worktrees needs ${popupSize.rows} terminal rows. Resize this pane; Esc closes.`, width)
+  const detailCount = rows - formRows.length - 4
   const screen: string[] = []
-  const border = (body: string) => `${color("│", "muted", colors)}${pad(fit(body, inside), inside)}${color("│", "muted", colors)}`
-  const line = (left: string, right: string, title = "") => {
-    const text = fit(safeDisplayText(title), inside)
-    return color(`${left}${text}${"─".repeat(Math.max(0, inside - Bun.stringWidth(text)))}${right}`, "muted", colors)
-  }
-  const add = (text: string) => screen.push(border(text))
-  screen.push(line("┌", "┐"))
+  const add = (text: string) => screen.push(pad(fit(text, width), width))
   add(`${color("REX", "cyan", colors)} ${color("/ WORKTREES", "bold", colors)}`)
-  screen.push(line("├", "┤"))
-  const fieldCount = Math.max(1, Math.min(5, rows - 11))
-  const detailCount = Math.max(3, rows - fieldCount - 8)
-  const focusIndex = view.rows.findIndex(row => row.id === focused)
-  const start = Math.max(0, Math.min(focusIndex - fieldCount + 1, view.rows.length - fieldCount))
-  for (let index = 0; index < fieldCount; index++) {
-    const row = view.rows[start + index]
-    if (!row) { add(""); continue }
+  add(color("─".repeat(width), "muted", colors))
+  for (const slot of formRows) {
+    const row = view.rows.find(row => row.id === slot.id) ?? slot
     const active = focused === row.id
     const tone = row.disabled ? "muted" : active ? "cyan" : "bold"
-    const indicator = index === 0 && start > 0 ? "↑" : index === fieldCount - 1 && start + fieldCount < view.rows.length ? "↓" : active ? "›" : " "
-    add(`${color(indicator, tone, colors)} ${color(pad(fit(safeDisplayText(row.label).toUpperCase(), 13), 13), tone, colors)}  ${color(fit(safeDisplayText(row.value) || "—", Math.max(1, inside - 17)), tone, colors)}`)
+    const indicator = active ? "›" : " "
+    add(`${color(indicator, tone, colors)} ${color(pad(fit(safeDisplayText(row.label).toUpperCase(), 13), 13), tone, colors)}  ${color(fit(safeDisplayText(row.value) || "—", Math.max(1, width - 17)), tone, colors)}`)
   }
-  add("")
   const current = view.rows.find(row => row.id === focused)
-  screen.push(line("├", "┤", ` ${options.editor?.title ?? current?.label ?? "Details"} `))
+  const heading = fit(safeDisplayText(options.editor?.title ?? current?.label ?? "Details") + " ", width)
+  add(color(`${heading}${"─".repeat(Math.max(0, width - Bun.stringWidth(heading)))}`, "muted", colors))
   const subtitle = current?.detail ?? view.rows.find(row => row.id === "destination")?.detail ?? ""
   const wrapped = [view.error, view.notice, subtitle].filter(Boolean).flatMap(message =>
-    Bun.wrapAnsi(safeDisplayText(message!), Math.max(1, inside - 10), { hard: true }).split("\n"))
+    Bun.wrapAnsi(safeDisplayText(message!), Math.max(1, width - 8), { hard: true }).split("\n"))
   const visible = options.editor ? 1 : detailCount
   const offset = Math.max(0, Math.min(options.detailOffset ?? 0, wrapped.length - visible))
   const detailLine = (index: number) => `${index === 0 && offset > 0 ? "↑ " : ""}${wrapped[offset + index] ?? ""}${index === visible - 1 && offset + visible < wrapped.length ? " ↓ PgDn" : ""}`
   if (options.editor) {
-    const errorRows = view.error ? 1 : 0
-    for (let index = 0; index < detailCount - errorRows; index++) add(options.editor.lines[index] ?? "")
-    if (errorRows) add(color(detailLine(0), "red", colors))
+    for (let index = 0; index < detailCount - 1; index++) add(options.editor.lines[index] ?? "")
+    add(view.error ? color(detailLine(0), "red", colors) : "")
   } else {
     for (let index = 0; index < detailCount; index++) add(color(detailLine(index), view.error ? "red" : view.notice ? "amber" : "muted", colors))
   }
-  screen.push(line("├", "┤"))
   const hint = (key: string, label: string) => `${color(key, "bold", colors)} ${color(label, "muted", colors)}`
   const button = (label: string, active: boolean, primary = false, disabled = false) =>
     color(`${active ? "›" : " "}[ ${safeDisplayText(label)} ]`, disabled ? "muted" : active ? "cyan" : primary ? "bold" : "muted", colors)
   add(options.footer ? color(options.footer, "muted", colors) : options.editor
     ? `${hint("Enter", "accept")} · ${hint("Esc", "back")} · ${hint("↑↓", "choices")} · ${hint("PgUp/PgDn", "details")}`
     : `${button(`${view.submitLabel} · Ctrl+S`, focused === "submit", true, view.submitDisabled)} ${button("Cancel · Esc", focused === "cancel")}  ${hint("Tab", "next")}`)
-  screen.push(line("└", "┘"))
-  return screen.slice(0, Math.max(1, rows)).join("\r\n")
+  return screen.join("\r\n")
 }
 
 const matchingChoices = <A>(choices: readonly InputChoice<A>[], text: string): number[] => {
@@ -110,9 +108,9 @@ export const advanceInputChoice = <A>(
 }
 
 export const renderInputChoice = <A>(
-  state: InputChoiceState, choices: readonly InputChoice<A>[], columns: number, rows: number, colors = !process.env.NO_COLOR, selectionOnly = false, count = Math.max(2, rows - 14)
+  state: InputChoiceState, choices: readonly InputChoice<A>[], columns: number, colors = !process.env.NO_COLOR, selectionOnly = false, count = choiceCount
 ): readonly string[] => {
-  const width = Math.max(20, columns) - 2
+  const width = Math.max(20, columns)
   const matches = matchingChoices(choices, state.text)
   const selected = matches.indexOf(state.selected ?? -1)
   const start = selected < 0 ? 0 : Math.max(0, Math.min(selected, matches.length - count))
@@ -131,7 +129,7 @@ const acknowledge = (title: string, lines: readonly string[], tone: NoticeTone, 
     render: (detailOffset, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
       const terminal = yield* Terminal.Terminal
       const notice = `${title} · ${lines.join(" · ")}`
-      return `\x1b[H\x1b[2J${renderFormFrame({ ...view, error: tone === "error" ? notice : undefined, notice: tone !== "error" ? notice : undefined }, "submit", yield* terminal.columns, yield* terminal.rows, !process.env.NO_COLOR, { detailOffset, footer: "Enter / Space close · Esc close · PgUp/PgDn details" })}`
+      return `\x1b[?25l\x1b[H\x1b[2J${renderFormFrame({ ...view, error: tone === "error" ? notice : undefined, notice: tone !== "error" ? notice : undefined }, "submit", yield* terminal.columns, yield* terminal.rows, !process.env.NO_COLOR, { detailOffset, footer: "Enter / Space close · Esc close · PgUp/PgDn details" })}\x1b[0J`
     }),
     clear: () => Effect.succeed(""),
     process: (input, offset) => Effect.succeed<Prompt.Action<number, void>>(input.key.name === "pageup" || input.key.name === "pagedown"
@@ -235,7 +233,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
     return Effect.gen(function*() {
       const terminal = yield* Terminal.Terminal
       yield* Effect.acquireRelease(
-        terminal.display("\x1b[?1049h"),
+        terminal.display("\x1b[?1049h\x1b[?25l"),
         () => terminal.display("\x1b[?25h\x1b[?1049l").pipe(Effect.orDie)
       )
       let machines: Machine[] = []
@@ -257,23 +255,26 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
       const chooseField: (view: FormView, initialFocus: FormField) => Effect.Effect<FormField, Terminal.QuitError, Prompt.Environment> =
         Effect.fnUntraced(function*(view: FormView, initialFocus: FormField) {
           let detailOffset = 0
-          const fields: FormField[] = [...view.rows.map(row => row.id), "submit", "cancel"]
+          let visibleRows = popupSize.rows
+          const fields: FormField[] = [...formRows.filter(slot => view.rows.some(row => row.id === slot.id)).map(row => row.id), "submit", "cancel"]
           const initial = Math.max(0, fields.indexOf(initialFocus))
           const prompt = Prompt.Custom<number, FormField, Terminal.Size>(initial, yield* resizeEvents, {
             render: (index, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
               const columns = yield* terminal.columns
               const rows = yield* terminal.rows
-              return `\x1b[H\x1b[2J${renderFormFrame(view, fields[index], columns, rows, !process.env.NO_COLOR, { detailOffset })}`
+              visibleRows = rows
+              return `\x1b[?25l\x1b[H\x1b[2J${renderFormFrame(view, fields[index], columns, rows, !process.env.NO_COLOR, { detailOffset })}\x1b[0J`
             }),
             clear: () => Effect.succeed(""),
             process: (event, index) => {
               if (event._tag === "Event") return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "NextFrame", state: index })
               const { key } = event.input
+              if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "Submit", value: "cancel" })
+              if (visibleRows < popupSize.rows) return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "Beep" })
               if (key.name === "pageup" || key.name === "pagedown") {
                 detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -1 : 1))
                 return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "NextFrame", state: index })
               }
-              if (key.name === "escape" || key.ctrl && key.name === "c") return Effect.succeed<Prompt.Action<number, FormField>>({ _tag: "Submit", value: "cancel" })
               if (key.ctrl && key.name === "s") return Effect.succeed<Prompt.Action<number, FormField>>(view.submitDisabled
                 ? { _tag: "Beep" } : { _tag: "Submit", value: "submit" })
               if (key.name === "enter" || key.name === "return") {
@@ -294,18 +295,23 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
       const inputChoice: <A>(options: InputChoiceOptions<A>) => Effect.Effect<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment> =
         Effect.fnUntraced(function*<A>(options: InputChoiceOptions<A>): Effect.fn.Return<InputChoiceResult<A>, Terminal.QuitError, Prompt.Environment | Scope.Scope> {
           let detailOffset = 0
+          let visibleRows = popupSize.rows
           const result = yield* Prompt.run(Prompt.Custom<InputChoiceState, InputChoiceResult<A> | null, Terminal.Size>(
             { text: "", selected: options.selected === undefined || options.selected < 0 ? null : options.selected }, yield* resizeEvents, {
             render: (state, action) => action._tag === "Submit" ? Effect.succeed("") : Effect.gen(function*() {
               const columns = yield* terminal.columns
               const rows = yield* terminal.rows
+              visibleRows = rows
               const view = activeView
-              const editor = renderInputChoice(state, options.choices, columns, rows, !process.env.NO_COLOR, options.selectionOnly, Math.max(2, rows - 14) - (view?.error ? 1 : 0))
+              const editor = renderInputChoice(state, options.choices, columns, !process.env.NO_COLOR, options.selectionOnly, Math.max(1, rows - formRows.length - 6))
               if (!view) return ""
-              return `\x1b[H\x1b[2J${renderFormFrame(view, focused, columns, rows, !process.env.NO_COLOR, { editor: { title: options.message, lines: editor }, detailOffset })}`
+              return `\x1b[?25l\x1b[H\x1b[2J${renderFormFrame(view, focused, columns, rows, !process.env.NO_COLOR, { editor: { title: options.message, lines: editor }, detailOffset })}\x1b[0J`
             }),
             clear: () => Effect.succeed(""),
             process: (event, state) => {
+              if (event._tag !== "Event" && visibleRows < popupSize.rows &&
+                event.input.key.name !== "escape" && !(event.input.key.ctrl && event.input.key.name === "c"))
+                return Effect.succeed<Prompt.Action<InputChoiceState, InputChoiceResult<A> | null>>({ _tag: "Beep" })
               if (event._tag !== "Event" && (event.input.key.name === "pageup" || event.input.key.name === "pagedown")) {
                 detailOffset = Math.max(0, detailOffset + (event.input.key.name === "pageup" ? -1 : 1))
                 return Effect.succeed<Prompt.Action<InputChoiceState, InputChoiceResult<A> | null>>({ _tag: "NextFrame", state })
@@ -426,7 +432,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
         if (showLoading) {
           const pending = { ...formView(true), notice: `Connecting to ${machine.label}…` }
           activeView = pending
-          yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(pending, "machine", yield* terminal.columns, yield* terminal.rows)}`)
+          yield* terminal.display(`\x1b[?25l\x1b[H\x1b[2J${renderFormFrame(pending, "machine", yield* terminal.columns, yield* terminal.rows)}\x1b[0J`)
         }
         const connected = yield* Effect.result(connectAndDiscover(machine, command, discoveredContext))
         if (Result.isFailure(connected)) {
@@ -521,7 +527,7 @@ export const popup = <E, R>(command: readonly string[], context: Effect.Effect<s
       }
       const initialView = { ...formView(true), notice: "Discovering projects and Rex sessions…" }
       activeView = initialView
-      yield* terminal.display(`\x1b[H\x1b[2J${renderFormFrame(initialView, "project", yield* terminal.columns, yield* terminal.rows)}`)
+      yield* terminal.display(`\x1b[?25l\x1b[H\x1b[2J${renderFormFrame(initialView, "project", yield* terminal.columns, yield* terminal.rows)}\x1b[0J`)
       const initialize = Effect.gen(function*() {
         contextPath = yield* context
         yield* loadMachines
