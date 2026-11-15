@@ -225,7 +225,7 @@ const shell = Effect.fnUntraced(function*(cwd: string) {
   if (!path.isAbsolute(program)) return yield* fail("SHELL must be an absolute executable path");
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(ChildProcess.make(program, path.basename(program) === "sh" ? ["-i"] : ["-l", "-i"], {
-    cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit"
+    cwd, detached: false, stdin: "inherit", stdout: "inherit", stderr: "inherit"
   }));
   const code = yield* child.exitCode;
   if (code !== 0) return yield* fail(`Shell exited with status ${code}`);

@@ -93,7 +93,7 @@ export const cloneRepository = Effect.fnUntraced(function*(url: string, destinat
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_") && value !== undefined) env[key] = value
   env.GIT_TERMINAL_PROMPT = "1"
   const child = yield* spawner.spawn(ChildProcess.make("git", ["clone", "--origin", "origin", "--", url, destination], {
-    env, stdin: "inherit", stdout: "inherit", stderr: "inherit"
+    env, detached: false, stdin: "inherit", stdout: "inherit", stderr: "inherit"
   }))
   const code = yield* child.exitCode
   if (code !== 0) return yield* fail(`Git clone failed (exit ${code}); destination retained at ${destination}`)

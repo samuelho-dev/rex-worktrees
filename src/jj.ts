@@ -224,7 +224,7 @@ export const cloneRepository = Effect.fnUntraced(function*(url: string, destinat
   const safe = yield* Effect.try({ try: () => safeOrigin(url, true), catch: () => new AppError({ message: "Unsafe JJ clone URL" }) })
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const child = yield* spawner.spawn(ChildProcess.make("jj", ["git", "clone", safe, destination], {
-    env: isolatedEnv(), stdin: "inherit", stdout: "inherit", stderr: "inherit"
+    env: isolatedEnv(), detached: false, stdin: "inherit", stdout: "inherit", stderr: "inherit"
   })).pipe(Effect.mapError(() => new AppError({ message: "Unable to launch JJ clone; destination may need inspection" })))
   const code = yield* child.exitCode
   if (code !== 0) return yield* fail(`JJ clone failed (exit ${code}); destination retained at ${destination}`)

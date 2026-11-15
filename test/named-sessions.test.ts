@@ -96,8 +96,55 @@ console.log(JSON.stringify(result));
       process.env.REX_BLOCK = "new-block";
       expect((yield* Effect.flip(cloneTask(cloneRequest))).message).toContain("requested Rex terminal");
       process.env.REX_SESSION = "created-2";
-      process.env.SHELL = "/usr/bin/true";
-      yield* cloneTask(cloneRequest);
+      yield* Effect.promise(async () => {
+        // Check /dev/tty at the real clone-process boundary before running each tool.
+        for (const program of ["git", "jj"]) {
+          const executable = Bun.which(program);
+          if (!executable) throw new Error(`${program} is required for terminal integration`);
+          const wrapper = join(bin, program);
+          await writeFile(wrapper, `#!/bin/sh
+if [ "$1" = clone ] || [ "$1 $2" = "git clone" ]; then
+  exec 3<>/dev/tty || exit 1
+fi
+exec ${JSON.stringify(executable)} "$@"
+`);
+          await chmod(wrapper, 0o755);
+        }
+        const shellInit = join(root, "shell-init");
+        await writeFile(shellInit, "if ( : <>/dev/tty ); then exit 0; else exit 1; fi\n");
+        const script = `
+import { BunRuntime, BunServices } from ${JSON.stringify(import.meta.resolve("@effect/platform-bun"))};
+import { Effect } from ${JSON.stringify(import.meta.resolve("effect"))};
+import { cloneRepository as cloneGit } from ${JSON.stringify(new URL("../src/git.ts", import.meta.url).href)};
+import { cloneRepository as cloneJj } from ${JSON.stringify(new URL("../src/jj.ts", import.meta.url).href)};
+import { cloneTask } from ${JSON.stringify(new URL("../src/worktrees.ts", import.meta.url).href)};
+BunRuntime.runMain(Effect.gen(function*() {
+  yield* cloneGit(${JSON.stringify(bare)}, ${JSON.stringify(join(root, "git-terminal"))});
+  yield* cloneJj(${JSON.stringify(bare)}, ${JSON.stringify(join(root, "jj-terminal"))});
+  yield* cloneTask(${JSON.stringify(cloneRequest)});
+}).pipe(Effect.provide(BunServices.layer)));
+`;
+        let output = "";
+        const decoder = new TextDecoder();
+        const child = Bun.spawn([process.execPath, "-e", script], {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SHELL: "/bin/sh", ENV: shellInit,
+            JJ_CONFIG: "", JJ_USER: "Rex Tests", JJ_EMAIL: "rex@example.test" },
+          terminal: { cols: 96, rows: 24, data: (_, bytes) => { output += decoder.decode(bytes, { stream: true }); } },
+        });
+        // A real PTY child needs a wall-clock watchdog if it hangs; fake timers cannot stop it.
+        const timeout = setTimeout(() => child.kill(), 4000);
+        try {
+          expect(await child.exited, output).toBe(0);
+        } finally {
+          clearTimeout(timeout);
+          if (child.exitCode === null) child.kill();
+          await child.exited;
+          child.terminal?.close();
+        }
+        for (const destination of ["git-terminal", "jj-terminal"]) {
+          expect(await readFile(join(root, destination, "tracked"), "utf8")).toBe("base\n");
+        }
+      });
       expect((yield* Effect.promise(() => readFile(join(root, "clone", "tracked"), "utf8")))).toBe("base\n");
       const associations = join(root, "state", "rex-worktrees", "associations");
       const entries = yield* Effect.promise(() => readdir(associations));
