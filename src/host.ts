@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { loadConfig, resolveCloneRoot } from "./config.ts";
+import { loadConfig, resolveCloneRoot, resolveWorktreeRoot } from "./config.ts";
 import { cloneSource as gitCloneSource, listBranches, listWorktrees as listGitWorktrees, missing, notRepository } from "./git.ts";
 import { repository, project, discoverProjects } from "./repositories.ts";
 import * as jj from "./jj.ts";
@@ -54,7 +54,8 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
       const inventory = yield* Effect.all({
         worktrees: canonical.vcs === "git" ? listGitWorktrees(canonical.path) : jj.listWorkspaces(canonical.path),
         branches: canonical.vcs === "git" ? listBranches(canonical.path) : Effect.succeed([]),
-        revisions: canonical.vcs === "jj" ? jj.listRevisions(canonical.path) : Effect.succeed([])
+        revisions: canonical.vcs === "jj" ? jj.listRevisions(canonical.path) : Effect.succeed([]),
+        worktreeRoot: resolveWorktreeRoot(canonical.path)
       }, { concurrency: 4 });
       result = {
         ...identity, kind: "project", project: canonical, checkout,
@@ -75,7 +76,8 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
       const inventory = yield* Effect.all({
         worktrees: repo.vcs === "git" ? listGitWorktrees(repo.path) : jj.listWorkspaces(repo.path),
         branches: repo.vcs === "git" ? listBranches(repo.path) : Effect.succeed([]),
-        revisions: repo.vcs === "jj" ? jj.listRevisions(repo.path) : Effect.succeed([])
+        revisions: repo.vcs === "jj" ? jj.listRevisions(repo.path) : Effect.succeed([]),
+        worktreeRoot: resolveWorktreeRoot(repo.path)
       }, { concurrency: 4 });
       result = {
         ...identity, kind: "worktrees", repository: repo,

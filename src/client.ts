@@ -73,12 +73,12 @@ export const inspectProject = Effect.fnUntraced(function*(host: DestinationHost,
   const result = yield* request(host, command, { kind: "project", path });
   if (result.kind === "project-missing") return yield* fail(`Project directory does not exist: ${result.path}`);
   if (result.kind !== "project") return yield* fail("Unexpected project response");
-  return { project: result.project, checkout: result.checkout, worktrees: result.worktrees, branches: result.branches, revisions: result.revisions };
+  return { project: result.project, checkout: result.checkout, worktrees: result.worktrees, branches: result.branches, revisions: result.revisions, worktreeRoot: result.worktreeRoot };
 });
 export const inspectWorktrees = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], repo: string) {
   const result = yield* request(host, command, { kind: "worktrees", repo });
   if (result.kind !== "worktrees") return yield* fail("Unexpected worktree response");
-  return { repository: result.repository, worktrees: result.worktrees, branches: result.branches, revisions: result.revisions };
+  return { repository: result.repository, worktrees: result.worktrees, branches: result.branches, revisions: result.revisions, worktreeRoot: result.worktreeRoot };
 });
 export const inspectRevision = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], repo: string, revision: string) {
   const result = yield* request(host, command, { kind: "revision", repo, revision });

@@ -1,6 +1,6 @@
 # Rex Worktrees
 
-A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for opening and creating **Git worktrees** and **Jujutsu (JJ) workspaces**. Pick a project, machine, checkout, and session; it opens a shell there. No agent or model required.
+A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for opening and creating **Git worktrees** and **Jujutsu (JJ) workspaces**. Pick a project, machine, session, and worktree; it opens a shell there. No agent or model required.
 
 <img width="693" height="236" alt="image" src="https://github.com/user-attachments/assets/fadd8e3c-30fc-4f94-98ca-41132a23ff36" />
 
@@ -34,15 +34,21 @@ Open **Open Worktree…** from the Rex palette, or run:
 rex do worktrees_open
 ```
 
+The popup detects the source terminal's project, current worktree, branch or revision, and full directory path. Git worktrees are separate checkout directories sharing one repository—not separate repositories or branch names.
+
 1. **Project:** select a discovered project or type an absolute repository path.
 2. **Machine:** choose this machine or an existing Rex host.
-3. **Checkout / Workspace:** select an existing checkout, or type a new Git branch or JJ workspace name. New JJ workspaces also need a **Start from** revision; a valid `trunk()` is selected automatically.
-4. **Session:** select an existing session, or type a name to create one.
-5. Choose **Open / Create / Clone** or press **Ctrl+S** from the form.
+3. **Session:** select an existing session, or type a name to create one.
+4. **Worktree / Workspace:** select an existing one, or choose **Create new worktree… / Create new workspace…**. This list contains worktrees, not branches or clone actions.
+5. **Branch:** **Create new worktree…** opens the branch editor directly, without another click on the form. Select an unused existing branch or type a new branch name. JJ uses **Start from** instead; a valid `trunk()` is selected automatically.
+6. **Directory:** new worktrees get a proposed absolute path; change it only if needed. A new JJ workspace takes its name from the directory's final component.
+7. Choose **Open worktree / Create worktree & open**, or press **Ctrl+S** from the form. Accepting a field only updates the form; creation happens on submission.
 
-**Mode** reuses a matching tab by default; choose a new tab or split instead. New Git checkouts can have a custom **Directory** name, separate from the branch.
+**Mode** reuses a matching tab by default; choose a new tab or split instead.
 
-The underlined `REX / WORKTREES` header and fields keep fixed positions; unavailable fields stay disabled. Editors and messages reuse the same details area, so only choice lists and long details scroll.
+For an **existing worktree**, Branch (or Revision) and Directory describe the detected checkout. They remain readable and **read-only—not disabled**; Tab skips them. Select a different worktree to open another checkout. For a **new worktree**, Branch and Directory are editable.
+
+The underlined `REX / WORKTREES` header, fields, and footer keep fixed positions. Editors and messages reuse the same details area, so only choice lists and long details scroll.
 
 Shells and interactive Git/JJ clones stay attached to the destination terminal. The shell comes from `$SHELL`, falling back to `/bin/sh`.
 
@@ -52,7 +58,7 @@ Shells and interactive Git/JJ clones stay attached to the destination terminal. 
 | ↑ / ↓ | Navigate fields or choices |
 | Enter | Edit a field, accept its value, or activate a focused button |
 | Ctrl+S | Submit the form; inside an editor, only accept that field |
-| Esc | Leave the editor, or close the form |
+| Esc | Return from an editor to the form; from the form, close the popup |
 | PageUp / PageDown | Scroll long details |
 
 Optional shortcut—add outside the managed section of your Rex config, then reload:
@@ -78,11 +84,11 @@ Both settings are optional. `projects` lists repositories explicitly; `roots` di
 
 Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine.
 
-The chooser can clone a known project to another directory or host. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
+If the selected machine lacks the project, the form proposes cloning it and shows the repository destination explicitly. **Directory** edits that path, and submission becomes **Clone & open**. Changing a field never starts a clone. The Worktree picker can also create a separate worktree after cloning; Directory then controls that worktree's path. Cloning opens a new tab. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
 
 ## Safety
 
-- Existing checkouts open unchanged. The plugin does not switch, reset, stash, clean, or delete your work.
+- Existing checkouts open unchanged. The plugin never switches, resets, stashes, cleans, or deletes an existing checkout.
 - **Creating a JJ workspace runs `jj workspace add`, which may snapshot its source workspace.**
 - Closing the chooser or a tab does not delete a checkout or stop an already-submitted task.
 - If a launch times out or says **needs inspection**, inspect the destination and session before retrying; a task may already exist.

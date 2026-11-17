@@ -131,13 +131,15 @@ export type CloneSource = typeof CloneSourceSchema.Type
 export const GitCloneInputSchema = Schema.Struct({
   vcs: Schema.Literal("git"), source: GitCloneSourceSchema, repo: Schema.String, session: SessionSelectionSchema,
   clientId: Schema.optional(ClientIdSchema), name: Schema.String, branch: Schema.String,
-  branchMode: Schema.Literals(["existing", "create"]), worktreeName: Schema.optional(Schema.String)
+  branchMode: Schema.Literals(["existing", "create"]), worktreeName: Schema.optional(Schema.String),
+  checkout: Schema.optional(Schema.Literals(["primary", "worktree"])), directory: Schema.optional(Schema.String)
 })
 export type GitCloneInput = typeof GitCloneInputSchema.Type
 export const JjCloneInputSchema = Schema.Struct({
   vcs: Schema.Literal("jj"), source: JjCloneSourceSchema, repo: Schema.String, session: SessionSelectionSchema,
   clientId: Schema.optional(ClientIdSchema), name: Schema.String,
-  worktreeName: Schema.optional(Schema.String), revision: Schema.optional(Schema.String)
+  worktreeName: Schema.optional(Schema.String), revision: Schema.optional(Schema.String),
+  checkout: Schema.optional(Schema.Literals(["primary", "worktree"])), directory: Schema.optional(Schema.String)
 })
 export type JjCloneInput = typeof JjCloneInputSchema.Type
 export const CloneInputSchema = Schema.Union([GitCloneInputSchema, JjCloneInputSchema])
@@ -166,7 +168,8 @@ export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, ses
 export type CloneTaskRequest = typeof CloneTaskRequestSchema.Type
 const LaunchInputFields = {
   repo: Schema.String, session: SessionSelectionSchema, name: Schema.String,
-  clientId: Schema.optional(ClientIdSchema), additional: Schema.optional(Schema.Boolean), split: Schema.optional(Schema.Boolean)
+  clientId: Schema.optional(ClientIdSchema), additional: Schema.optional(Schema.Boolean), split: Schema.optional(Schema.Boolean),
+  directory: Schema.optional(Schema.String)
 }
 export const GitLaunchInputSchema = Schema.Struct({
   ...LaunchInputFields, vcs: Schema.Literal("git"), branch: Schema.optional(Schema.String),
@@ -244,10 +247,10 @@ export type RequestBody<R = Request> = R extends Request ? Omit<R, keyof Request
 export const ResponseSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema), projects: Schema.Array(RepositorySchema), roots: Schema.optional(Schema.Array(Schema.String)), cloneRoot: Schema.String, checkout: Schema.optional(RepositorySchema) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("sessions"), sessions: Schema.Array(SessionTargetSchema), clients: Schema.Array(ClientTargetSchema) }),
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project"), project: RepositorySchema, checkout: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema), worktreeRoot: Schema.optional(Schema.String) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("project-missing"), path: Schema.String }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-source"), source: CloneSourceSchema }),
-  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), repository: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema) }),
+  Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("worktrees"), repository: RepositorySchema, worktrees: Schema.Array(WorktreeSchema), branches: Schema.Array(Schema.String), revisions: Schema.Array(JjRevisionChoiceSchema), worktreeRoot: Schema.optional(Schema.String) }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("revision"), revision: JjRevisionSchema }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("plan"), plan: LaunchPlanSchema }),
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("clone-plan"), plan: ClonePlanSchema }),
@@ -336,6 +339,7 @@ export type FormRow = {
   readonly value: string
   readonly detail?: string
   readonly disabled?: boolean
+  readonly isReadOnly?: boolean
 }
 export type FormView = {
   readonly rows: readonly FormRow[]
@@ -353,9 +357,10 @@ export type ProjectChoice = {
   readonly source?: { readonly machineKey: Machine["key"]; readonly hostId: ServerHostId; readonly repository: Repository; readonly checkoutPath?: string }
 }
 export type Destination =
-  | { readonly path: string; readonly branch?: never; readonly revision?: never; readonly label: string }
+  | { readonly path: string; readonly worktree: Worktree; readonly branch?: never; readonly revision?: never; readonly label: string }
   | { readonly branch: string; readonly path?: never; readonly revision?: never; readonly label: string }
   | { readonly revision: string; readonly path?: never; readonly branch?: never; readonly label: string }
+  | { readonly label: string; readonly path?: never; readonly branch?: never; readonly revision?: never }
 export type Draft = {
   readonly machine?: Machine
   readonly host?: DestinationHost
@@ -365,6 +370,9 @@ export type Draft = {
   readonly sourcePath?: string
   readonly destination?: Destination
   readonly worktreeName?: string
+  readonly directory?: string
+  readonly worktreeRoot?: string
+  readonly isCreating?: boolean
   readonly session?: SessionSelection
   readonly clientId?: ClientId
   readonly mode: "auto" | "new-tab" | "split"

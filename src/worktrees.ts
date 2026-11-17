@@ -4,7 +4,7 @@ import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveWorktreeRoot } from "./config.ts";
 import { AppError, CommandError, BlockIdSchema, RexProcessSchema, RexDirectorySchema, SessionSelectionSchema, type BlockId, type CloneInput, type ClonePlan, type CloneLaunchResult, type CloneTaskRequest, type ServerHostId, type SessionId, type WindowId, type TaskRequest, type LaunchInput, type LaunchPlan, type LaunchResult, type Association, type JjRevision, type JjWorkspaceName, type RepositoryHead, type SessionSelection } from "./contracts.ts";
-import { cloneRepository as cloneGitRepository, createWorktree, gitContext, listBranches, listWorktrees as listGitWorktrees, missing, origin, originDefaultHead, planWorktree, remoteBranchHead, remoteBranches, repositoryHead, safeOrigin, validCloneBranch } from "./git.ts";
+import { cloneRepository as cloneGitRepository, createPrimaryBranch, createWorktree, gitContext, listBranches, listWorktrees as listGitWorktrees, missing, origin, originDefaultHead, planWorktree, remoteBranchHead, remoteBranches, repositoryHead, safeOrigin, validCloneBranch } from "./git.ts";
 import * as jj from "./jj.ts";
 import { repository } from "./repositories.ts";
 import { associations, rememberCloneRoot, saveAssociation } from "./state.ts";
@@ -62,6 +62,10 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   const clientId = input.clientId ?? (clients.length === 1 ? clients[0]?.id : undefined);
   const repo = yield* repository(input.repo);
   if (repo.vcs !== input.vcs) return yield* fail("Repository backend changed since selection");
+  const pathService = yield* Path.Path;
+  if (input.directory !== undefined && (!pathService.isAbsolute(input.directory) || pathService.resolve(input.directory) !== input.directory || input.directory === pathService.parse(input.directory).root))
+    return yield* fail("Worktree directory must be a normalized absolute directory");
+  if (input.directory !== undefined && input.path !== undefined) return yield* fail("Directory cannot be combined with an existing worktree path");
   let path: string;
   let checkout: "existing" | "attach" | "create";
   let branch: string | null = null;
@@ -73,9 +77,10 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   if (input.vcs === "git") {
     if (!!input.branch === !!input.path) return yield* fail("Select exactly one branch or existing worktree path");
     if (input.path && input.worktreeName !== undefined) return yield* fail("Worktree name only applies to a branch checkout");
-    worktreeRoot = input.branch ? yield* resolveWorktreeRoot(repo.path) : undefined;
+    worktreeRoot = input.branch ? (input.directory ? pathService.dirname(input.directory) : yield* resolveWorktreeRoot(repo.path)) : undefined;
     if (input.branch) {
-      const destination = yield* planWorktree(repo.path, input.branch, worktreeRoot, input.worktreeName);
+      const destination = yield* planWorktree(repo.path, input.branch, worktreeRoot, input.directory ? pathService.basename(input.directory) : input.worktreeName);
+      if (input.directory && destination.path !== input.directory) return yield* fail("Branch is already checked out at a different directory");
       path = destination.path;
       branch = input.branch;
       checkout = destination.existing ? "existing" : (yield* listBranches(repo.path)).includes(branch) ? "attach" : "create";
@@ -101,7 +106,8 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
       workspaceName = tree.name;
       checkout = "existing";
     } else {
-      worktreeRoot = yield* resolveWorktreeRoot(repo.path);
+      if (input.directory && pathService.basename(input.directory) !== input.worktreeName) return yield* fail("Workspace name must match the directory name");
+      worktreeRoot = input.directory ? pathService.dirname(input.directory) : yield* resolveWorktreeRoot(repo.path);
       const planned = yield* jj.planWorkspace(repo.path, input.worktreeName!, input.revision!, worktreeRoot);
       path = planned.path;
       workspaceName = planned.workspaceName;
@@ -137,7 +143,7 @@ export const planLaunch = Effect.fnUntraced(function*(input: LaunchInput, expect
   };
   if (input.vcs === "git") return {
     ...common, vcs: "git" as const,
-    input: { ...input, repo: repo.path, ...(input.path ? { path } : {}) }, branch, checkout,
+    input: { ...input, repo: repo.path, ...(input.path ? { path } : {}), ...(input.directory ? { worktreeName: pathService.basename(input.directory) } : {}) }, branch, checkout,
     ...(gitBase ? { base: gitBase } : {}),
     label: action === "focus" ? "Focus existing tab" : checkout === "create" ? "Create worktree & open" :
       checkout === "attach" ? "Attach branch & open" : action === "split" ? "Open pane" : "Open tab"
@@ -155,7 +161,7 @@ export const sameLaunchPlan = (a: LaunchPlan, b: LaunchPlan): boolean =>
   a.hostId === b.hostId && a.worktreeRoot === b.worktreeRoot &&
   a.clientId === b.clientId &&
   a.input.repo === b.input.repo && sameSession(a.input.session, b.input.session) &&
-  a.input.path === b.input.path && a.input.worktreeName === b.input.worktreeName &&
+  a.input.path === b.input.path && a.input.directory === b.input.directory && a.input.worktreeName === b.input.worktreeName &&
   a.input.name === b.input.name && a.input.clientId === b.input.clientId &&
   a.input.additional === b.input.additional && a.input.split === b.input.split &&
   a.path === b.path && a.checkout === b.checkout &&
@@ -339,10 +345,23 @@ export const checkCloneParent = Effect.fnUntraced(function*(destination: string)
   });
 });
 
+const validateCloneDestination = Effect.fnUntraced(function*(input: CloneInput) {
+  const path = yield* Path.Path;
+  if (input.directory !== undefined) {
+    if (!path.isAbsolute(input.directory) || path.resolve(input.directory) !== input.directory || input.directory === path.parse(input.directory).root)
+      return yield* fail("Worktree directory must be a normalized absolute directory");
+    if (input.checkout !== "worktree") return yield* fail("Worktree directory requires a worktree checkout");
+  }
+  if (input.checkout === "primary" && input.worktreeName !== undefined) return yield* fail("Primary checkout cannot have a worktree name");
+  if (input.checkout === "worktree" && input.vcs === "jj" && !input.directory && !input.worktreeName)
+    return yield* fail("JJ worktree checkout requires a workspace name or directory");
+});
+
 export const planClone = Effect.fnUntraced(function*(input: CloneInput, expectedHostId?: ServerHostId) {
   const host = yield* localHost;
   if (expectedHostId && host.id !== expectedHostId) return yield* fail("Wrong Rex clone host");
   if (input.vcs !== input.source.vcs) return yield* fail("Clone source backend does not match request");
+  yield* validateCloneDestination(input);
   yield* Schema.decodeUnknownEffect(SessionSelectionSchema)(input.session);
   if (input.session.kind === "existing") {
     const sessionId = input.session.id;
@@ -360,6 +379,9 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
   const commonDir = yield* cloneDestination(input.repo, url, input.vcs, host.id);
   if (commonDir === undefined) yield* checkCloneParent(input.repo);
   const existing = commonDir !== undefined;
+  if (existing && input.checkout === "primary" && input.vcs === "git" &&
+    (input.branchMode !== "existing" || (yield* repositoryHead(input.repo)).branch !== input.branch))
+    return yield* fail("Existing primary checkout is not on the requested branch");
   let gitBase: string | undefined;
   let base: JjRevision | undefined;
   if (input.vcs === "git") {
@@ -376,10 +398,15 @@ export const planClone = Effect.fnUntraced(function*(input: CloneInput, expected
     }
   }
   if (input.vcs === "jj" && existing && !base) base = yield* jj.resolveRevision(input.repo, "@-");
+  if (input.vcs === "jj" && existing && input.checkout === "primary" && base) {
+    const current = yield* jj.resolveRevision(input.repo, "@-");
+    if (current.commitId !== base.commitId || current.changeId !== base.changeId)
+      return yield* fail("Existing primary workspace is not based on the requested revision");
+  }
   const clientId = input.clientId ?? (clients.length === 1 ? clients[0]?.id : undefined);
   const warning = !clientId && clients.length > 1 ? "Multiple Rex apps are connected; select the intended app" : undefined;
-  const snapshotDetail = input.vcs === "jj" && (input.worktreeName || existing)
-    ? `JJ ${input.worktreeName ? "workspace creation" : "new change"} snapshots the destination workspace at ${input.repo}; its working-copy commit and colocated Git index intent-to-add entries may change.`
+  const snapshotDetail = input.vcs === "jj" && input.checkout !== "primary" && (input.directory || input.worktreeName || existing)
+    ? `JJ ${input.directory || input.worktreeName ? "workspace creation" : "new change"} snapshots the destination workspace at ${input.repo}; its working-copy commit and colocated Git index intent-to-add entries may change.`
     : undefined;
   const common = {
     hostId: host.id, ...(clientId ? { clientId } : {}),
@@ -404,7 +431,7 @@ export const sameClonePlan = (a: ClonePlan, b: ClonePlan): boolean =>
   a.repo === b.repo && a.existing === b.existing && a.commonDir === b.commonDir &&
   a.input.repo === b.input.repo && sameSession(a.input.session, b.input.session) &&
   a.input.clientId === b.input.clientId && a.input.name === b.input.name &&
-  a.input.worktreeName === b.input.worktreeName &&
+  a.input.worktreeName === b.input.worktreeName && a.input.directory === b.input.directory && a.input.checkout === b.input.checkout &&
   a.input.source.url === b.input.source.url && a.input.source.sourceHostId === b.input.source.sourceHostId &&
   (a.vcs === "git" && b.vcs === "git" && a.input.vcs === "git" && b.input.vcs === "git"
     ? a.base === b.base && a.input.branch === b.input.branch && a.input.branchMode === b.input.branchMode &&
@@ -441,6 +468,8 @@ export const launchClone = Effect.fnUntraced(function*(input: CloneInput, comman
 
 // The terminal task owns clone/create so a closed popup cannot cancel the destination operation.
 export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan) {
+  yield* validateCloneDestination(plan.input);
+  if (plan.repo !== plan.input.repo) return yield* fail("Clone destination changed since review");
   if (plan.vcs === "git") yield* validCloneBranch(plan.input.branch, plan.input.worktreeName);
   const url = yield* Effect.try({
     try: () => safeOrigin(plan.input.source.url, plan.input.source.sourceHostId === plan.hostId),
@@ -469,7 +498,7 @@ export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan)
     yield* fs.makeDirectory(plan.repo);
     if ((yield* fs.realPath(parent)) !== parent || (yield* fs.realPath(plan.repo)) !== plan.repo)
       return yield* fail(`Clone path changed; reserved destination retained at ${plan.repo}`);
-    if (plan.vcs === "git") yield* cloneGitRepository(url, plan.repo);
+    if (plan.vcs === "git") yield* cloneGitRepository(url, plan.repo, plan.input.checkout === "primary" && plan.input.branchMode === "existing" ? plan.input.branch : undefined);
     else yield* jj.cloneRepository(url, plan.repo);
   }
   const repo = yield* repository(plan.repo);
@@ -480,11 +509,18 @@ export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan)
   if (plan.vcs === "jj") {
     const base = plan.base ?? (yield* jj.resolveRevision(repo.path, "@-"));
     let cwd: string;
-    if (plan.input.worktreeName) {
-      const planned = yield* jj.planWorkspace(repo.path, plan.input.worktreeName, base.commitId, yield* resolveWorktreeRoot(repo.path));
-      if (planned.base.commitId !== base.commitId || planned.base.changeId !== base.changeId)
-        return yield* fail(`JJ clone base is unavailable; clone retained at ${plan.repo}`);
-      const created = yield* jj.createWorkspace(repo.path, planned.workspaceName, base, yield* resolveWorktreeRoot(repo.path));
+    const workspaceName = plan.input.directory ? pathService.basename(plan.input.directory) : plan.input.worktreeName;
+    const worktreeRoot = plan.input.directory ? pathService.dirname(plan.input.directory) : workspaceName ? yield* resolveWorktreeRoot(repo.path) : undefined;
+    if (plan.input.checkout === "primary" && plan.existing) {
+      const current = yield* jj.resolveRevision(repo.path, "@-");
+      if (current.commitId !== base.commitId || current.changeId !== base.changeId)
+        return yield* fail("Existing primary workspace changed since review");
+      cwd = repo.path;
+    } else if (workspaceName) {
+      const planned = yield* jj.planWorkspace(repo.path, workspaceName, base.commitId, worktreeRoot);
+      if (planned.base.commitId !== base.commitId || planned.base.changeId !== base.changeId || (plan.input.directory && planned.path !== plan.input.directory))
+        return yield* fail(`JJ clone base or directory is unavailable; clone retained at ${plan.repo}`);
+      const created = yield* jj.createWorkspace(repo.path, planned.workspaceName, base, worktreeRoot);
       if (!created.path || !created.present || created.path !== planned.path)
         return yield* fail(`JJ workspace registration changed; clone retained at ${plan.repo}`);
       cwd = created.path;
@@ -501,22 +537,36 @@ export const prepareCloneCheckout = Effect.fnUntraced(function*(plan: ClonePlan)
   const local = yield* listBranches(repo.path);
   const remote = yield* remoteBranches(repo.path);
   const { branch, branchMode } = plan.input;
+  if (plan.input.checkout === "primary") {
+    if (plan.existing) {
+      if (branchMode !== "existing" || (yield* repositoryHead(repo.path)).branch !== branch)
+        return yield* fail("Existing primary checkout is not on the requested branch");
+    } else if (branchMode === "create") {
+      if (local.includes(branch) || remote.includes(branch)) return yield* fail(`Branch ${branch} already exists; clone retained at ${plan.repo}`);
+      yield* createPrimaryBranch(repo.path, branch);
+    } else if ((yield* repositoryHead(repo.path)).branch !== branch) {
+      return yield* fail(`Cloned primary checkout is not on ${branch}; clone retained at ${plan.repo}`);
+    }
+    return { repo, cwd: yield* fs.realPath(repo.path) };
+  }
+  const worktreeRoot = plan.input.directory ? pathService.dirname(plan.input.directory) : yield* resolveWorktreeRoot(repo.path);
+  const worktreeName = plan.input.directory ? pathService.basename(plan.input.directory) : plan.input.worktreeName;
   let cwd: string;
   if (branchMode === "existing") {
     if (!local.includes(branch) && !remote.includes(branch))
       return yield* fail(`Branch ${branch} was not pushed to origin; clone retained at ${plan.repo}`);
-    const worktreeRoot = yield* resolveWorktreeRoot(repo.path);
+    const planned = yield* planWorktree(repo.path, branch, worktreeRoot, worktreeName);
+    if (plan.input.directory && planned.path !== plan.input.directory) return yield* fail("Branch is already checked out at a different directory");
     if (local.includes(branch)) {
-      const planned = yield* planWorktree(repo.path, branch, worktreeRoot, plan.input.worktreeName);
-      cwd = planned.existing ? planned.path : (yield* createWorktree(repo.path, branch, { attachOnly: true, worktreeRoot, worktreeName: plan.input.worktreeName })).path;
+      cwd = planned.existing ? planned.path : (yield* createWorktree(repo.path, branch, { attachOnly: true, worktreeRoot, worktreeName })).path;
     } else {
-      cwd = (yield* createWorktree(repo.path, branch, { startPoint: yield* remoteBranchHead(repo.path, branch), worktreeRoot, worktreeName: plan.input.worktreeName })).path;
+      cwd = (yield* createWorktree(repo.path, branch, { startPoint: yield* remoteBranchHead(repo.path, branch), worktreeRoot, worktreeName })).path;
     }
   } else {
     if (local.includes(branch) || remote.includes(branch)) return yield* fail(`Branch ${branch} already exists; clone retained at ${plan.repo}`);
     const base = plan.existing ? plan.base : (yield* repositoryHead(repo.path)).head;
     if (!base) return yield* fail("Origin default branch changed since review");
-    cwd = (yield* createWorktree(repo.path, branch, { startPoint: base, worktreeRoot: yield* resolveWorktreeRoot(repo.path), worktreeName: plan.input.worktreeName })).path;
+    cwd = (yield* createWorktree(repo.path, branch, { startPoint: base, worktreeRoot, worktreeName })).path;
   }
   return { repo, cwd: yield* fs.realPath(cwd) };
 });
