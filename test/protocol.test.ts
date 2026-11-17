@@ -204,6 +204,7 @@ it("review comparison ignores JSON key order and warnings but pins host, base, r
     }),
   ).toBe(false);
   expect(sameLaunchPlan(plan, { ...plan, worktreeRoot: "/other" })).toBe(false);
+  expect(sameLaunchPlan(plan, { ...plan, input: { ...plan.input, directory: "/trees/task-name" } })).toBe(false);
   expect(
     sameLaunchPlan(plan, {
       ...plan,
@@ -240,6 +241,8 @@ it("clone protocol preserves separate source, review, launch and task identities
   })).toThrow();
   expect(sameClonePlan(plan, { ...plan, warning: "Informational warning" })).toBe(true);
   expect(sameClonePlan(plan, { ...plan, input: { ...plan.input, branchMode: "create" } })).toBe(false);
+  expect(sameClonePlan(plan, { ...plan, input: { ...plan.input, checkout: "primary" } })).toBe(false);
+  expect(sameClonePlan(plan, { ...plan, input: { ...plan.input, directory: "/trees/task" } })).toBe(false);
   expect(sameClonePlan(plan, { ...plan, input: { ...plan.input, source: { ...plan.input.source, sourceHostId: hostId } } })).toBe(false);
   expect(sameClonePlan(plan, { ...plan, repo: "/other" })).toBe(false);
   expect(sameClonePlan({ ...plan, existing: true, commonDir: "/target/repo/.git", base: "abc" },

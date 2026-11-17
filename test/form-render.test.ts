@@ -16,10 +16,10 @@ const view: FormView = {
       value: "Homelab",
       detail: "Host ID: host-remote",
     },
+    { id: "session", label: "Session", value: "session-123" },
     { id: "destination", label: "Worktree", value: "feature" },
     { id: "branch", label: "Branch", value: "feature" },
-    { id: "checkoutName", label: "Directory", value: "feature-tree" },
-    { id: "session", label: "Session", value: "session-123" },
+    { id: "checkoutName", label: "Directory", value: "/projects/atelier.worktrees/feature-tree" },
     { id: "mode", label: "Mode", value: "Auto" },
   ],
   submitLabel: "Create worktree & open",
@@ -40,7 +40,7 @@ describe("static form frame", () => {
       expect(lines).toHaveLength(16);
       expect(lines[0]?.trimEnd()).toBe("REX / WORKTREES");
       expect(lines[1]).toMatch(/^─+$/);
-      for (const [index, label] of ["PROJECT", "MACHINE", "WORKTREE", "BRANCH", "DIRECTORY", "SESSION", "MODE"].entries())
+      for (const [index, label] of ["PROJECT", "MACHINE", "SESSION", "WORKTREE", "BRANCH", "DIRECTORY", "MODE"].entries())
         expect(lines[index + 2]).toContain(label);
       expect(lines[9]).toContain("─");
       expect(lines.every(line => Bun.stringWidth(line) === 80)).toBe(true);
@@ -49,8 +49,8 @@ describe("static form frame", () => {
     expect(states[4]![15]).toContain("Esc back");
     expect(states[4]![14]).toContain("Cannot use this session");
     expect(states[1]!.join(" ")).toContain("Host ID: host-remote");
-    expect(states[1]![6]).toMatch(/DIRECTORY\s+—/);
-    expect(states[2]![6]).toContain("feature-tree");
+    expect(states[1]![7]).toMatch(/DIRECTORY\s+—/);
+    expect(states[2]![7]).toContain("/projects/atelier.worktrees/feature-tree");
   });
 
   it("scrolls long details without scrolling any form field", () => {
@@ -60,7 +60,7 @@ describe("static form frame", () => {
     expect(first).toContain("PgDn");
     expect(last.replace(/\s+/g, " ")).toContain("END OF ERROR");
     for (const frame of [first, last]) {
-      expect(frame.split("\r\n")[7]).toContain("SESSION");
+      expect(frame.split("\r\n")[4]).toContain("SESSION");
       expect(frame.split("\r\n")[8]).toContain("MODE");
       expect(frame.split("\r\n")[15]).toContain("Tab next");
     }

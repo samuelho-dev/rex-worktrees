@@ -87,17 +87,20 @@ export const originDefaultHead = Effect.fnUntraced(function*(repoPath: string) {
   return (yield* git(repoPath, "rev-parse", "--verify", `${ref.trim()}^{commit}`)).trim()
 })
 
-export const cloneRepository = Effect.fnUntraced(function*(url: string, destination: string) {
+export const cloneRepository = Effect.fnUntraced(function*(url: string, destination: string, branch?: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const env: Environment = {}
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_") && value !== undefined) env[key] = value
   env.GIT_TERMINAL_PROMPT = "1"
-  const child = yield* spawner.spawn(ChildProcess.make("git", ["clone", "--origin", "origin", "--", url, destination], {
+  const child = yield* spawner.spawn(ChildProcess.make("git", ["clone", "--origin", "origin", ...(branch ? ["--branch", branch] : []), "--", url, destination], {
     env, detached: false, stdin: "inherit", stdout: "inherit", stderr: "inherit"
   }))
   const code = yield* child.exitCode
   if (code !== 0) return yield* fail(`Git clone failed (exit ${code}); destination retained at ${destination}`)
 }, Effect.scoped)
+export const createPrimaryBranch = Effect.fnUntraced(function*(repoPath: string, branch: string) {
+  yield* git(repoPath, "switch", "-c", branch)
+})
 export const validCloneBranch = Effect.fnUntraced(function*(branch: string, worktreeName?: string) {
   if (!branch || branch.startsWith("-") || branch.split("/").some(part => !part || part === "." || part === "..") || /[\p{ASCII}&&\p{Cc}]/v.test(branch)) return yield* fail("Invalid clone branch")
   yield* run("git", ["check-ref-format", "--branch", branch]).pipe(Effect.catch(() => fail("Invalid clone branch")))

@@ -794,6 +794,36 @@ it.live("clone checkout task keeps pushed branches and rejects unpushed, collidi
       expect(prepared.cwd).toBe(join(root, "destination-worktrees", "cloned", "published"));
       expect(git(prepared.cwd, "symbolic-ref", "--short", "HEAD").trim()).toBe("published");
       expect(git(source, "branch", "--show-current").trim()).toBe("main");
+      const primaryRepo = join(root, "primary-published");
+      const primaryPlan = makePlan(primaryRepo, "published", "existing");
+      const primary = yield* prepareCloneCheckout({ ...primaryPlan, input: { ...primaryPlan.input, checkout: "primary" } });
+      expect(primary.cwd).toBe(primaryRepo);
+      expect(git(primaryRepo, "branch", "--show-current").trim()).toBe("published");
+      expect((yield* listWorktrees(primaryRepo)).length).toBe(1);
+      const createdRepo = join(root, "primary-new");
+      const createdPlan = makePlan(createdRepo, "new-branch", "create");
+      const created = yield* prepareCloneCheckout({ ...createdPlan, input: { ...createdPlan.input, checkout: "primary" } });
+      expect(created.cwd).toBe(createdRepo);
+      expect(git(createdRepo, "branch", "--show-current").trim()).toBe("new-branch");
+      expect((yield* listWorktrees(createdRepo)).length).toBe(1);
+      const customRepo = join(root, "custom-clone");
+      const customDirectory = join(root, "custom-parent", "custom-checkout");
+      const customPlan = makePlan(customRepo, "published", "existing");
+      const custom = yield* prepareCloneCheckout({ ...customPlan, input: { ...customPlan.input, checkout: "worktree", directory: customDirectory } });
+      expect(custom.cwd).toBe(customDirectory);
+      expect(git(customRepo, "branch", "--show-current").trim()).toBe("main");
+      expect(git(custom.cwd, "branch", "--show-current").trim()).toBe("published");
+      const occupiedPlan = makePlan(join(root, "occupied-clone"), "published", "existing");
+      yield* Effect.flip(prepareCloneCheckout({ ...occupiedPlan, input: { ...occupiedPlan.input, checkout: "worktree", directory: customDirectory } }));
+      const linkParent = join(root, "custom-link");
+      yield* Effect.promise(() => symlink(join(root, "custom-parent"), linkParent));
+      const linkedPlan = makePlan(join(root, "linked-clone"), "published", "existing");
+      yield* Effect.flip(prepareCloneCheckout({ ...linkedPlan, input: { ...linkedPlan.input, checkout: "worktree", directory: join(linkParent, "other") } }));
+      const mismatchPlan = makePlan(join(root, "mismatch-clone"), "main", "existing");
+      yield* Effect.flip(prepareCloneCheckout({ ...mismatchPlan, input: { ...mismatchPlan.input, checkout: "worktree", directory: join(root, "other") } }));
+      const existingPrimary = { ...primaryPlan, existing: true, commonDir: primary.repo.commonDir };
+      yield* Effect.flip(prepareCloneCheckout({ ...existingPrimary, input: { ...primaryPlan.input, checkout: "primary", branch: "main" } }));
+      expect(git(primaryRepo, "branch", "--show-current").trim()).toBe("published");
       const missing = join(root, "missing-branch");
       expect((yield* Effect.flip(prepareCloneCheckout(makePlan(missing, "unpushed", "existing")))).message).toContain("not pushed");
       expect((yield* repository(missing)).path).toBe(missing);
@@ -885,15 +915,21 @@ it.live("JJ clone checkout creates a named workspace at a source-resolved publis
             vcs: "jj" as const, url: bare, sourceHostId: hostId,
             revisions: [{ expression: revision.commitId, label: "base", revision }], revision
           },
-          repo: destination, session: { kind: "existing" as const, id: sessionId }, name: "Task", worktreeName: "fresh", revision: revision.commitId
+          repo: destination, session: { kind: "existing" as const, id: sessionId }, name: "Task", checkout: "worktree" as const, directory: join(root, "custom", "fresh"), revision: revision.commitId
         },
         base: revision
       };
       const prepared = yield* prepareCloneCheckout(plan);
       expect(prepared.repo.vcs).toBe("jj");
-      expect(prepared.cwd).toBe(`${destination}.worktrees/fresh`);
+      expect(prepared.cwd).toBe(join(root, "custom", "fresh"));
       expect((yield* jj.resolveRevision(prepared.cwd, "@-")).commitId).toBe(revision.commitId);
       expect((yield* jj.listWorkspaces(destination)).map(tree => tree.name)).toContain("fresh");
+      const primaryRepo = join(root, "jj-primary");
+      const { directory: _directory, ...primaryInput } = plan.input;
+      const primary = yield* prepareCloneCheckout({ ...plan, repo: primaryRepo, input: { ...primaryInput, repo: primaryRepo, checkout: "primary" } });
+      expect(primary.cwd).toBe(primaryRepo);
+      expect((yield* jj.listWorkspaces(primaryRepo)).map(tree => tree.name)).toEqual(["default"]);
+      expect((yield* jj.resolveRevision(primaryRepo, "@-")).commitId).toBe(revision.commitId);
       const repeated = yield* Effect.exit(prepareCloneCheckout(plan));
       expect(repeated).toMatchObject({ _tag: "Failure" });
     } finally {
