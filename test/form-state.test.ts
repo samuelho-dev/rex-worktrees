@@ -251,7 +251,7 @@ it("JJ clone launch stays within Rex's control limit with a large source revisio
     const input = cloneInputFor(candidate);
     if (input?.vcs !== "jj") throw new Error("Expected JJ clone input");
     const payload = JSON.stringify({ request: JSON.stringify({
-      version: 4, hostId: local.hostId, kind: "clone-launch", input,
+      version: 5, hostId: local.hostId, kind: "clone-launch", input,
       reviewed: { vcs: "jj", hostId: local.hostId, repo: input.repo, existing: false, label: "Clone & Open", input }
     }) });
     expect(Buffer.byteLength(payload)).toBeLessThan(65536);

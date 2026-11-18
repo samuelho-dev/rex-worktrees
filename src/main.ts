@@ -5,7 +5,7 @@ import { connectMachine, inspectProject, listMachines, review, submit } from "./
 import { AppError, BlockIdSchema, ClientIdSchema, CliBooleanFlagSchema, CliStringFlagSchema, CloneTaskRequestSchema, SessionIdSchema, TaskRequestSchema, type CliFlags, type LaunchInput, type PopupOrigin } from "./contracts.ts"
 import { repository } from "./repositories.ts"
 import { hostRequest } from "./host.ts"
-import { closeManagedPopup, openPopup, originDirectory, withLocalIdentity } from "./rex.ts"
+import { openPopup, originDirectory, withLocalIdentity } from "./rex.ts"
 import { setup } from "./setup.ts"
 import { popup } from "./ui.ts"
 import { cloneTask, task } from "./worktrees.ts"
@@ -67,7 +67,7 @@ const main = Effect.gen(function*() {
  }
  if (verb === "popup") {
   const flags = yield* parseFlags(args)
-  if (Object.keys(flags).some(key => !["--host", "--context", "--origin-session", "--origin-block", "--origin-client", "--no-context", "--managed-popup"].includes(key))) {
+  if (Object.keys(flags).some(key => !["--host", "--context", "--origin-session", "--origin-block", "--origin-client", "--no-context"].includes(key))) {
    return yield* Effect.fail(new AppError({ message: "Invalid popup flags" }))
   }
   if (flags["--context"] && flags["--no-context"]) return yield* Effect.fail(new AppError({ message: "--context and --no-context are mutually exclusive" }))
@@ -86,7 +86,6 @@ const main = Effect.gen(function*() {
     : args.length && sessionId && blockId ? originDirectory(sessionId, blockId)
      : Effect.succeed(process.cwd())
   yield* popup(executable, context, origin, flags["--host"])
-  if (flags["--managed-popup"]) yield* closeManagedPopup
   return
  }
  if (verb === "launch-popup") {
@@ -119,7 +118,7 @@ const main = Effect.gen(function*() {
   return
  }
  if (verb === "open") {
-  if (args.some(arg => ["--context", "--origin-session", "--origin-block", "--origin-client", "--no-context", "--managed-popup"].includes(arg))) {
+  if (args.some(arg => ["--context", "--origin-session", "--origin-block", "--origin-client", "--no-context"].includes(arg))) {
    return yield* Effect.fail(new AppError({ message: "Context flags are only supported by popup" }))
   }
   const flags = yield* parseFlags(args)

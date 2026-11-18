@@ -9,7 +9,8 @@ export default defineConfig({
     }
   }],
   test: {
-    // Git integration fixtures spawn many processes; competing suites can exhaust the 5s per-test deadline.
-    fileParallelism: false
+    // Real Git/JJ and PTY subprocess tests need a bounded integration budget, without competing suites.
+    fileParallelism: false,
+    testTimeout: 30_000
   }
 })

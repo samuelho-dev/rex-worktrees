@@ -52,6 +52,9 @@ The underlined `REX / WORKTREES` header, fields, and footer keep fixed positions
 
 Shells and interactive Git/JJ clones stay attached to the destination terminal. The shell comes from `$SHELL`, falling back to `/bin/sh`.
 
+Rex owns terminal placement, focus, and popup cleanup. New sessions and their first terminal are created together; checkout/clone work then runs in that terminal independently of the chooser.
+Connection and review snapshots are operation-local: new sessions and forced new tabs skip reuse scans, and submission still checks fresh host and checkout state.
+
 | Key | Action |
 | --- | --- |
 | Tab / Shift+Tab | Move between fields and buttons |
@@ -82,7 +85,7 @@ Both settings are optional. `projects` lists repositories explicitly; `roots` di
 
 ### Other machines
 
-Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine.
+Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine. This native-integration update uses helper protocol v5; update all execution machines together.
 
 If the selected machine lacks the project, the form proposes cloning it and shows the repository destination explicitly. **Directory** edits that path, and submission becomes **Clone & open**. Changing a field never starts a clone. The Worktree picker can also create a separate worktree after cloning; Directory then controls that worktree's path. Cloning opens a new tab. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
 

@@ -164,7 +164,10 @@ export const CloneLaunchResultSchema = Schema.Struct({
   repo: Schema.String, pending: Schema.Literal(true), warning: Schema.optional(Schema.String)
 })
 export type CloneLaunchResult = typeof CloneLaunchResultSchema.Type
-export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, sessionId: SessionIdSchema, rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String) })
+export const RexTaskSettingsSchema = Schema.Struct({ rexBinDir: Schema.optional(Schema.String), rexLocalEndpoint: Schema.optional(Schema.String) })
+export type RexTaskSettings = typeof RexTaskSettingsSchema.Type
+export const RexTaskIdentitySchema = Schema.Struct({ REX_SESSION: SessionIdSchema, REX_BLOCK: BlockIdSchema })
+export const CloneTaskRequestSchema = Schema.Struct({ plan: ClonePlanSchema, ...RexTaskSettingsSchema.fields })
 export type CloneTaskRequest = typeof CloneTaskRequestSchema.Type
 const LaunchInputFields = {
   repo: Schema.String, session: SessionSelectionSchema, name: Schema.String,
@@ -187,7 +190,7 @@ const LaunchPlanFields = {
   hostId: ServerHostIdSchema, clientId: Schema.optional(ClientIdSchema),
   path: Schema.String, worktreeRoot: Schema.optional(Schema.String),
   action: Schema.Literals(["focus", "new-tab", "split"]),
-  target: Schema.optional(Schema.Struct({ windowId: WindowIdSchema, blockId: BlockIdSchema, label: Schema.String })),
+  target: Schema.optional(Schema.Struct({ windowId: WindowIdSchema, blockId: BlockIdSchema })),
   nameRole: Schema.Literals(["tab", "pane", "none"]), name: Schema.optional(Schema.String),
   label: Schema.String, detail: Schema.optional(Schema.String), warning: Schema.optional(Schema.String)
 }
@@ -211,9 +214,9 @@ export const LaunchResultSchema = Schema.Struct({
 })
 export type LaunchResult = typeof LaunchResultSchema.Type
 const TaskRequestFields = {
-  repo: Schema.String, hostId: ServerHostIdSchema, rexBinDir: Schema.optional(Schema.String),
-  rexLocalEndpoint: Schema.optional(Schema.String), path: Schema.String, commonDir: Schema.String,
-  sessionId: SessionIdSchema, worktreeRoot: Schema.optional(Schema.String)
+  repo: Schema.String, hostId: ServerHostIdSchema, ...RexTaskSettingsSchema.fields,
+  path: Schema.String, commonDir: Schema.String,
+  session: SessionSelectionSchema, worktreeRoot: Schema.optional(Schema.String)
 }
 export const GitTaskRequestSchema = Schema.Struct({
   ...TaskRequestFields, vcs: Schema.Literal("git"), branch: Schema.optional(Schema.String),
@@ -228,7 +231,7 @@ export const JjTaskRequestSchema = Schema.Struct({
 export type JjTaskRequest = typeof JjTaskRequestSchema.Type
 export const TaskRequestSchema = Schema.Union([GitTaskRequestSchema, JjTaskRequestSchema])
 export type TaskRequest = typeof TaskRequestSchema.Type
-export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(4), hostId: ServerHostIdSchema })
+export const RequestIdentitySchema = Schema.Struct({ version: Schema.Literal(5), hostId: ServerHostIdSchema })
 export type RequestIdentity = typeof RequestIdentitySchema.Type
 export const RequestSchema = Schema.Union([
   Schema.Struct({ ...RequestIdentitySchema.fields, kind: Schema.Literal("discover"), context: Schema.optional(Schema.String) }),
@@ -266,17 +269,19 @@ export const PopupOriginSchema = Schema.Struct({ sessionId: Schema.optional(Sess
 export type PopupOrigin = typeof PopupOriginSchema.Type
 export const RexIdentitySchema = Schema.Struct({ host_id: ServerHostIdSchema, endpoint: Schema.String, principal: Schema.Struct({ transport: Schema.String }) })
 export const RexSessionsSchema = Schema.Struct({ sessions: Schema.Array(Schema.Struct({ session_id: SessionIdSchema, label: Schema.String })) })
-export const RexSessionCreatedSchema = Schema.Struct({ session_id: SessionIdSchema })
+export const RexCreatedSchema = Schema.Struct({ window_id: WindowIdSchema, block_ids: Schema.Array(BlockIdSchema) })
+export const RexSplitCreatedSchema = Schema.Struct({ block_ids: Schema.Array(BlockIdSchema) })
+export const RexSessionCreatedSchema = Schema.Struct({ session_id: SessionIdSchema, initial_windows: Schema.Array(RexCreatedSchema) })
 export const RexClientsSchema = Schema.Struct({
   clients: Schema.Array(Schema.Struct({
     client_id: ClientIdSchema, info: Schema.optional(Schema.Struct({ kind: Schema.String, label: Schema.optional(Schema.String) })),
     connection_state: Schema.optional(Schema.String)
   }))
 })
-export const RexWindowsSchema = Schema.Struct({
-  windows: Schema.Array(Schema.Struct({
-    window_id: WindowIdSchema, label: Schema.String,
-    layers: Schema.Array(Schema.Struct({ blocks: Schema.optional(Schema.Array(Schema.Struct({ block_id: BlockIdSchema, host_id: ServerHostIdSchema }))) }))
+export const RexBlocksSchema = Schema.Struct({
+  blocks: Schema.Array(Schema.Struct({
+    block_id: BlockIdSchema, host_id: Schema.optional(ServerHostIdSchema), placement: Schema.String,
+    window_id: Schema.optional(Schema.NullOr(WindowIdSchema))
   }))
 })
 export const popupSize = { columns: 80, rows: 16 }
@@ -302,7 +307,6 @@ export const RexViewSchema = Schema.Struct({
     }))
   }))
 })
-export const RexCreatedSchema = Schema.Struct({ window_id: Schema.optional(WindowIdSchema), block_ids: Schema.Array(BlockIdSchema) })
 export const RexLayerSchema = Schema.Struct({ layer_id: Schema.NullOr(LayerIdSchema), block_ids: Schema.NullOr(Schema.Array(Schema.NullOr(BlockIdSchema))), revision: Schema.Number })
 export const RexDirectorySchema = Schema.Struct({ pwd: Schema.optional(Schema.String) })
 export const RexRegistrySchema = Schema.Struct({
@@ -317,11 +321,11 @@ export const RexActionsSchema = Schema.Struct({ actions: Schema.Array(Schema.Str
 export const RexHelperArgsSchema = Schema.Struct({ properties: Schema.Struct({ request: Schema.Struct({ type: Schema.Literal("string") }) }) })
 export const RexConfigCheckSchema = Schema.Struct({ path: Schema.String, exists: Schema.Boolean, diagnostics: Schema.Array(Schema.Unknown) })
 
-export const CliBooleanFlagSchema = Schema.Literals(["--additional", "--split", "--no-context", "--managed-popup"])
+export const CliBooleanFlagSchema = Schema.Literals(["--additional", "--split", "--no-context"])
 export const CliStringFlagSchema = Schema.Literals(["--bin", "--config", "--host", "--repo", "--session", "--name", "--branch", "--revision", "--worktree", "--worktree-name", "--client", "--context", "--origin-session", "--origin-block", "--origin-client"])
 export const CliFlagsSchema = Schema.Struct({
   "--additional": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--split": Schema.mutableKey(Schema.optional(Schema.Boolean)),
-  "--no-context": Schema.mutableKey(Schema.optional(Schema.Boolean)), "--managed-popup": Schema.mutableKey(Schema.optional(Schema.Boolean)),
+  "--no-context": Schema.mutableKey(Schema.optional(Schema.Boolean)),
   "--bin": Schema.mutableKey(Schema.optional(Schema.String)), "--config": Schema.mutableKey(Schema.optional(Schema.String)), "--host": Schema.mutableKey(Schema.optional(Schema.String)), "--repo": Schema.mutableKey(Schema.optional(Schema.String)),
   "--session": Schema.mutableKey(Schema.optional(SessionIdSchema)), "--name": Schema.mutableKey(Schema.optional(Schema.String)),
   "--branch": Schema.mutableKey(Schema.optional(Schema.String)), "--worktree": Schema.mutableKey(Schema.optional(Schema.String)),
