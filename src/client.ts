@@ -1,25 +1,22 @@
 import { Effect, Schema } from "effect";
 import { dispatchHost } from "./host.ts";
-import { AppError, RexActionsSchema, RexHelperArgsSchema, RexWorktreesResponseSchema, type CloneInput, type ClonePlan, type DestinationHost, type LaunchInput, type LaunchPlan, type Machine, type Request, type RequestBody, type Response } from "./contracts.ts";
+import { AppError, RexActionsSchema, RexHelperArgsSchema, RexRegistrySchema, RexWorktreesResponseSchema, type CloneInput, type ClonePlan, type DestinationHost, type LaunchInput, type LaunchPlan, type Machine, type Request, type RequestBody, type Response } from "./contracts.ts";
 import { localHost, machinesRegistry, remoteIdentity, remoteRex } from "./rex.ts";
 const fail = (message: string) => Effect.fail(new AppError({ message }));
 
-export const listMachines = Effect.gen(function*() {
-  const registry = yield* machinesRegistry;
-  const machines: Machine[] = [
-    { key: "local", label: registry.home.this_machine && registry.home.label || "This machine", local: true, selector: process.env.REX_WORKTREES_LOCAL_ENDPOINT ?? "local" },
-    ...registry.hosts.map(({ host }) => ({ key: host.id, label: host.label, local: false, selector: host.label }))
-  ];
-  return machines;
-});
+const machinesIn = (registry: typeof RexRegistrySchema.Type): Machine[] => [
+  { key: "local", label: registry.home.this_machine && registry.home.label || "This machine", local: true, selector: process.env.REX_WORKTREES_LOCAL_ENDPOINT ?? "local" },
+  ...registry.hosts.map(({ host }) => ({ key: host.id, label: host.label, local: false, selector: host.label }))
+];
+export const listMachines = Effect.map(machinesRegistry, machinesIn);
 
 export const connectMachine = Effect.fnUntraced(function*(machine: Machine) {
-  const choices = yield* listMachines;
-  const current = choices.find(choice => choice.key === machine.key && choice.local === machine.local);
+  const registry = yield* machinesRegistry;
+  const current = machinesIn(registry).find(choice => choice.key === machine.key && choice.local === machine.local);
   if (!current) return yield* fail(`Rex machine ${machine.label} is no longer registered; choose another machine`);
   if (current.local) return { ...current, hostId: (yield* localHost).id };
   const identity = yield* remoteIdentity(current.selector);
-  const registered = (yield* machinesRegistry).hosts.find(entry => entry.host.id === current.key);
+  const registered = registry.hosts.find(entry => entry.host.id === current.key);
   if (!registered?.host.endpoints.includes(identity.endpoint)) {
     return yield* fail(`Rex machine ${current.label} resolved to an unexpected server; refusing to route remotely`);
   }
@@ -34,13 +31,13 @@ export const connectMachine = Effect.fnUntraced(function*(machine: Machine) {
 });
 
 const connectedRequest = Effect.fnUntraced(function*(host: DestinationHost, command: readonly string[], body: RequestBody) {
-  const encoded: Request = { version: 4, hostId: host.hostId, ...body };
+  const encoded: Request = { version: 5, hostId: host.hostId, ...body };
   const response: Response = host.local
     ? yield* dispatchHost(encoded, command)
     : yield* Schema.decodeUnknownEffect(RexWorktreesResponseSchema)(
       yield* remoteRex(host.selector, ["do", "worktrees_request", "--args", JSON.stringify({ request: JSON.stringify(encoded) }), "--json"])
     );
-  if (response.hostId !== host.hostId || response.version !== 4 ||
+  if (response.hostId !== host.hostId || response.version !== 5 ||
     response.kind !== body.kind && !(body.kind === "project" && response.kind === "project-missing" && response.path === body.path))
     return yield* fail(`Unexpected Rex host/protocol response from ${host.label}; update rex-worktrees on that machine, run setup, and reload its Rex config`);
   return response;

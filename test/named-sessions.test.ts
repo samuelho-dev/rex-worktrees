@@ -4,16 +4,18 @@ import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { ServerHostIdSchema, SessionSelectionSchema, type CloneInput, type LaunchInput } from "../src/contracts.ts";
+import { MachineSchema, ServerHostIdSchema, SessionIdSchema, SessionSelectionSchema, type CloneInput, type LaunchInput } from "../src/contracts.ts";
 import { cloneTask, launch, launchClone, planClone, planLaunch } from "../src/worktrees.ts";
+import { connectMachine } from "../src/client.ts";
+import { hostRequest } from "../src/host.ts";
 
-it.live("reviews never create sessions; launch and clone use only the new native ID after final review", () =>
+it.live("reviews use fresh operation snapshots and launch tasks only after final review", () =>
   Effect.gen(function*() {
     const root = yield* Effect.promise(async () => realpath(await mkdtemp(join(tmpdir(), "rex-named-session-"))));
     const repo = join(root, "repo");
     const bin = join(root, "bin");
     const log = join(root, "rex-log.jsonl");
-    const previous = Object.fromEntries(["REX_BIN_DIR", "REX_WORKTREES_LOCAL_ENDPOINT", "REX_TEST_LOG", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "HOME", "REX_SESSION", "REX_BLOCK", "SHELL"].map(key => [key, process.env[key]]));
+    const previous = Object.fromEntries(["REX_BIN_DIR", "REX_WORKTREES_LOCAL_ENDPOINT", "REX_TEST_LOG", "REX_TEST_REMOTE_ENDPOINT", "REX_TEST_REGISTERED_ENDPOINT", "REX_TEST_REMOTE_HOST", "REX_TEST_BLOCK_MODE", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "HOME", "REX_SESSION", "REX_BLOCK", "SHELL"].map(key => [key, process.env[key]]));
     try {
       process.env.HOME = root;
       process.env.XDG_CONFIG_HOME = join(root, "config");
@@ -34,19 +36,30 @@ it.live("reviews never create sessions; launch and clone use only the new native
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const at = args.indexOf("--autostart=false") + 1;
-const cmd = args.slice(at);
+const tail = args.slice(at);
+const cmd = tail[0] === "--timeout" ? tail.slice(2) : tail;
+const remote = args[args.indexOf("-S") + 1] === "Remote";
 appendFileSync(process.env.REX_TEST_LOG, JSON.stringify(cmd) + "\\n");
 let result;
 const created = (readFileSync(process.env.REX_TEST_LOG, "utf8").match(/"session.create"/g) || []).length;
-if (cmd[0] === "whoami") result = { host_id: "fixture-host", endpoint: "unix:///fixture.sock", principal: { transport: "unix" } };
+if (cmd[0] === "whoami") result = remote
+  ? { host_id: process.env.REX_TEST_REMOTE_HOST || "remote-host", endpoint: process.env.REX_TEST_REMOTE_ENDPOINT || "unix:///remote-one", principal: { transport: "unix" } }
+  : { host_id: "fixture-host", endpoint: "unix:///fixture.sock", principal: { transport: "unix" } };
+else if (cmd[0] === "hosts" && cmd[1] === "list") result = { home: { label: "Local", endpoint: "unix:///fixture.sock", this_machine: true },
+  hosts: [{ host: { id: "remote-id", label: "Remote", endpoints: [process.env.REX_TEST_REGISTERED_ENDPOINT || process.env.REX_TEST_REMOTE_ENDPOINT || "unix:///remote-one"] } }] };
+else if (cmd[0] === "actions") result = { actions: [{ name: "worktrees_request", args: { properties: { request: { type: "string" } } } }] };
 else if (cmd[0] === "ls") result = { sessions: [{ session_id: "old-id", label: "Same label" },
   ...Array.from({ length: created }, (_, index) => ({ session_id: "created-" + (index + 1), label: "Same label" }))] };
-else if (cmd[0] === "client" && cmd[1] === "ls") result = { clients: [] };
+else if (cmd.includes("client.list")) result = { clients: [] };
 else if (cmd[0] === "do" && cmd[1] === "worktrees_config") result = JSON.stringify({ config: {}, directory: process.env.XDG_CONFIG_HOME + "/rex" });
-else if (cmd[0] === "api" && cmd[1] === "call" && cmd[2] === "session.create") result = { session_id: "created-" + created };
-else if (cmd[0] === "window" && cmd[1] === "new") result = { window_id: "new-window", block_ids: ["new-block"] };
-else if (cmd[0] === "window" && cmd[1] === "ls") result = { windows: [{ window_id: "new-window", label: "Clone task", layers: [{ blocks: [{ block_id: "new-block", host_id: "fixture-host" }] }] }] };
-else if (cmd[0] === "focus") result = {};
+else if (cmd.includes("session.create")) result = { session_id: "created-" + created, initial_windows: [{ window_id: "new-window", block_ids: ["new-block"] }] };
+else if (cmd.includes("session.list_blocks")) result = { blocks: cmd.includes("old-id")
+  ? [{ block_id: "dead", host_id: "fixture-host", placement: "placed", window_id: "reuse-window" },
+     { block_id: "live", host_id: "fixture-host", placement: "placed", window_id: process.env.REX_TEST_BLOCK_MODE === "moved" ? "other-window" : "reuse-window" }]
+  : cmd.includes("created-2") ? [{ block_id: "new-block", host_id: "fixture-host", placement: "placed", window_id: "new-window" }] : [] };
+else if (cmd.at(-1) === "process") result = { last_exit: cmd.includes("dead") ? { exit_code: 0 } : null, foreground: { cwd: ${JSON.stringify(repo)} } };
+else if (cmd.at(-1) === "pwd") result = { pwd: ${JSON.stringify(repo)} };
+else if (cmd.includes("session.focus_block")) result = {};
 else { console.error("Unexpected Rex call: " + cmd.join(" ")); process.exit(1); }
 console.log(JSON.stringify(result));
 `));
@@ -57,6 +70,51 @@ console.log(JSON.stringify(result));
       process.env.XDG_STATE_HOME = join(root, "state");
       const hostId = Schema.decodeUnknownSync(ServerHostIdSchema)("fixture-host");
       const input: LaunchInput = { vcs: "git", repo, path: repo, name: "Task", session: { kind: "new", name: "Same label" } };
+      process.env.REX_TEST_REMOTE_ENDPOINT = "unix:///remote-one";
+      process.env.REX_TEST_REMOTE_HOST = "remote-host";
+      delete process.env.REX_TEST_REGISTERED_ENDPOINT;
+      delete process.env.REX_TEST_BLOCK_MODE;
+      const remoteMachine = yield* Schema.decodeEffect(MachineSchema)({ key: "remote-id", label: "Remote", local: false, selector: "Remote" });
+      expect((yield* connectMachine(remoteMachine)).hostId).toBe("remote-host");
+      expect((yield* Effect.promise(() => readFile(log, "utf8"))).match(/"hosts","list"/g)).toHaveLength(1);
+      process.env.REX_TEST_REMOTE_ENDPOINT = "unix:///remote-two";
+      process.env.REX_TEST_REMOTE_HOST = "remote-host-2";
+      expect((yield* connectMachine(remoteMachine)).hostId).toBe("remote-host-2");
+      expect((yield* Effect.promise(() => readFile(log, "utf8"))).match(/"hosts","list"/g)).toHaveLength(2);
+      process.env.REX_TEST_REGISTERED_ENDPOINT = "unix:///unregistered";
+      expect((yield* Effect.flip(connectMachine(remoteMachine))).message).toContain("unexpected server");
+
+      const associationDirectory = join(root, "state", "rex-worktrees", "associations");
+      yield* Effect.promise(() => mkdir(join(root, "state", "rex-worktrees"), { recursive: true }));
+      yield* Effect.promise(() => writeFile(associationDirectory, "not a directory"));
+      expect((yield* planLaunch(input, hostId)).warning).toBeUndefined();
+      const reuseInput: LaunchInput = { ...input, session: { kind: "existing", id: SessionIdSchema.make("old-id") } };
+      const additional = yield* planLaunch({ ...reuseInput, additional: true }, hostId);
+      expect(additional.action).toBe("new-tab");
+      expect(additional.target).toBeUndefined();
+      expect(additional.warning).toBeUndefined();
+      expect((yield* planLaunch(reuseInput, hostId)).warning).toBeDefined();
+      yield* Effect.promise(() => rm(associationDirectory));
+      yield* Effect.promise(() => mkdir(associationDirectory));
+      for (const [index, blockId] of ["dead", "live"].entries()) {
+        yield* Effect.promise(() => writeFile(join(associationDirectory, `${index}.json`), JSON.stringify({
+          vcs: "git", hostId, commonDir: join(repo, ".git"), path: repo, sessionId: "old-id", windowId: "reuse-window", blockId
+        })));
+      }
+      const beforeReuse = (yield* Effect.promise(() => readFile(log, "utf8"))).match(/"session.list_blocks"/g)?.length ?? 0;
+      expect((yield* planLaunch(reuseInput, hostId)).target).toEqual({ windowId: "reuse-window", blockId: "live" });
+      process.env.REX_TEST_BLOCK_MODE = "moved";
+      expect((yield* planLaunch(reuseInput, hostId)).action).toBe("new-tab");
+      expect((yield* Effect.promise(() => readFile(log, "utf8"))).match(/"session.list_blocks"/g)).toHaveLength(beforeReuse + 2);
+      yield* Effect.promise(() => rm(associationDirectory, { recursive: true }));
+
+      for (const kind of ["project", "worktrees"]) {
+        const inventory = yield* hostRequest(JSON.stringify({ version: 5, hostId, kind, path: repo, repo }), ["/usr/bin/true"]);
+        if (inventory.kind !== "project" && inventory.kind !== "worktrees") throw new Error("Expected checkout inventory");
+        expect(inventory.worktrees).toMatchObject([{ vcs: "git", path: repo, branch: "main" }]);
+        expect(inventory.branches).toContain("main");
+        expect(inventory.revisions).toEqual([]);
+      }
       const reviewed = yield* planLaunch(input, hostId);
       expect(reviewed.action).toBe("new-tab");
       yield* planLaunch(input, hostId);
@@ -70,11 +128,9 @@ console.log(JSON.stringify(result));
       const result = yield* launch(input, ["/usr/bin/true"], reviewed, hostId);
       expect(result.sessionId).toBe("created-1");
       const calls = yield* Schema.decodeEffect(Schema.Array(Schema.fromJsonString(Schema.Array(Schema.String))))((yield* Effect.promise(() => readFile(log, "utf8"))).trim().split("\n"));
-      expect(calls.filter(call => call[2] === "session.create")).toEqual([["api", "call", "session.create", JSON.stringify({ label: "Same label" })]]);
-      const tab = calls.find(call => call[0] === "window" && call[1] === "new");
-      if (!tab) throw new Error("Rex did not receive a task tab request");
-      expect(tab.slice(tab.indexOf("-s"), tab.indexOf("-s") + 2)).toEqual(["-s", "created-1"]);
-      expect(JSON.parse(tab[tab.indexOf("task") + 1]!).sessionId).toBe("created-1");
+      const nativeWindow = JSON.parse(calls.find(call => call.includes("session.create"))!.at(-1)!).initial_windows[0];
+      const taskCommand = nativeWindow.layout.block.options.command;
+      expect(JSON.parse(taskCommand[taskCommand.indexOf("task") + 1]).session).toEqual(input.session);
 
       const clone: CloneInput = {
         vcs: "git", repo: join(root, "clone"), name: "Clone task", branch: "main", branchMode: "existing",
@@ -87,14 +143,15 @@ console.log(JSON.stringify(result));
       const cloneResult = yield* launchClone(clone, ["/usr/bin/true"], cloneReview, hostId);
       expect(cloneResult.sessionId).toBe("created-2");
       const cloneCalls = yield* Schema.decodeEffect(Schema.Array(Schema.fromJsonString(Schema.Array(Schema.String))))((yield* Effect.promise(() => readFile(log, "utf8"))).trim().split("\n"));
-      const cloneTab = cloneCalls.filter(call => call[0] === "window" && call[1] === "new").at(-1)!;
-      const cloneRequest = JSON.parse(cloneTab[cloneTab.indexOf("clone-task") + 1]!);
-      expect(cloneRequest.sessionId).toBe("created-2");
+      const cloneWindow = JSON.parse(cloneCalls.filter(call => call.includes("session.create")).at(-1)!.at(-1)!).initial_windows[0];
+      const cloneCommand = cloneWindow.layout.block.options.command;
+      const cloneRequest = JSON.parse(cloneCommand[cloneCommand.indexOf("clone-task") + 1]);
       expect(cloneRequest.plan.input.session).toEqual({ kind: "new", name: "Same label" });
       expect(cloneCalls.filter(call => call[2] === "session.create")).toHaveLength(2);
       process.env.REX_SESSION = "old-id";
       process.env.REX_BLOCK = "new-block";
-      expect((yield* Effect.flip(cloneTask(cloneRequest))).message).toContain("requested Rex terminal");
+      const requested = { ...cloneRequest, plan: { ...cloneRequest.plan, input: { ...cloneRequest.plan.input, session: { kind: "existing", id: "created-2" } } } };
+      expect((yield* Effect.flip(cloneTask(requested))).message).toContain("requested Rex session and terminal");
       process.env.REX_SESSION = "created-2";
       yield* Effect.promise(async () => {
         // Check /dev/tty at the real clone-process boundary before running each tool.

@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { Cause, Context, Effect, Path, Schema } from "effect";
-import { AppError, BlockIdSchema, SessionIdSchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexWindowsSchema, RexViewSchema, RexCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, RexLayoutNode, RexTerminalSizeSchema, popupSize, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin } from "./contracts.ts";
+import { AppError, RexTaskIdentitySchema, RexIdentitySchema, RexSessionsSchema, RexSessionCreatedSchema, RexClientsSchema, RexBlocksSchema, RexViewSchema, RexCreatedSchema, RexSplitCreatedSchema, RexLayerSchema, RexDirectorySchema, RexProcessSchema, RexRegistrySchema, RexLayoutNode, RexTerminalSizeSchema, popupSize, type BlockId, type ClientId, type SessionId, type WindowId, type Environment, type PopupOrigin, type SessionSelection, type RexTaskSettings, type ServerHostId, type LaunchPlan } from "./contracts.ts";
 import { run } from "./process.ts";
 const localName = hostname().toLowerCase().replace(/\.$/, "").replace(/\.local$/, "");
 export const localDirectoryUri = (raw: string): string | undefined => {
@@ -84,25 +84,22 @@ export const listSessions = Effect.gen(function*() {
   const result = yield* parse(RexSessionsSchema, yield* rex(["ls", "--json"]));
   return result.sessions.map((session) => ({ id: session.session_id, label: session.label }));
 });
-export const createSession = Effect.fnUntraced(function*(name: string) {
-  const result = yield* parse(RexSessionCreatedSchema, yield* rex(["api", "call", "session.create", JSON.stringify({ label: name })]));
-  return result.session_id;
-});
 export const listClients = Effect.gen(function*() {
-  const result = yield* parse(RexClientsSchema, yield* rex(["client", "ls", "--json"]));
+  const result = yield* parse(RexClientsSchema, yield* rex(["api", "call", "client.list", JSON.stringify({ kinds: ["app"] })]));
   return result.clients.filter((client) => client.info?.kind === "app" && client.connection_state === "connected")
     .map((client) => ({ id: client.client_id, label: client.info?.label ?? client.client_id }));
 });
 
-export const windowList = Effect.fnUntraced(function*(sessionId: SessionId) {
-  const result = yield* parse(RexWindowsSchema, yield* rex(["window", "ls", "-s", sessionId, "--json"]));
-  return result.windows;
+export const localBlocks = Effect.fnUntraced(function*(sessionId: SessionId) {
+  const host = yield* localHost;
+  const result = yield* parse(RexBlocksSchema, yield* rex(["api", "call", "-s", sessionId, "session.list_blocks", JSON.stringify({ session_id: sessionId })]));
+  return result.blocks.filter(item => item.host_id === host.id && item.placement === "placed");
+});
+export const localBlockWindow = Effect.fnUntraced(function*(sessionId: SessionId, blockId: BlockId) {
+  return (yield* localBlocks(sessionId)).find(item => item.block_id === blockId)?.window_id ?? undefined;
 });
 export const originDirectory = Effect.fnUntraced(function*(sessionId: SessionId, blockId: BlockId) {
-  const host = yield* localHost;
-  const windows = yield* windowList(sessionId);
-  if (!windows.some((window) => window.layers.some((layer) =>
-    layer.blocks?.some((block) => block.block_id === blockId && block.host_id === host.id)))) return undefined;
+  if (!(yield* localBlockWindow(sessionId, blockId))) return undefined;
   const raw = yield* rex(["block", "call", "-s", sessionId, "-b", blockId, "pwd"]);
   const result = yield* parse(RexDirectorySchema, raw);
   const directory = result.pwd ? localDirectoryUri(result.pwd) : undefined;
@@ -123,32 +120,61 @@ const commandWithPath = (command: readonly string[]) => {
   return env.length ? ["/usr/bin/env", ...env, ...command] : command;
 };
 
-export const createTab = Effect.fnUntraced(function*(sessionId: SessionId, name: string, cwd: string, command: readonly string[]) {
-  const result = yield* parse(RexCreatedSchema, yield* rex(["window", "new", "-s", sessionId, name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...commandWithPath(command)]));
-  const blockId = result.block_ids[0];
-  if (!blockId) return yield* Effect.fail(new AppError({ message: "Rex created a tab without a terminal block" }));
-  if (!result.window_id) return yield* Effect.fail(new AppError({ message: "Rex did not return a window ID" }));
-  return { windowId: result.window_id, blockId };
+const terminalLayout = (command: readonly string[], cwd: string, label: string, onCompletion = false, size?: typeof popupSize) => ({
+  block: { flavor: "com.superlogical.terminal.shell", label, options: {
+    command: commandWithPath(command), shell: "none", cwd, exit: { on_completion: onCompletion }, ...(size ? { size } : {})
+  } }
 });
 
-export const createSplit = Effect.fnUntraced(function*(sessionId: SessionId, windowId: WindowId, blockId: BlockId, name: string, cwd: string, command: readonly string[]) {
-  const result = yield* parse(RexCreatedSchema, yield* rex(["split", "-s", sessionId, "-b", blockId, "--split=right", "--label", name, "-c", cwd, "--shell=none", "--keep-open", "--json", "--", ...commandWithPath(command)]));
-  const created = result.block_ids.find((id) => id !== blockId);
-  if (!created) return yield* Effect.fail(new AppError({ message: "Rex created a split without a new terminal block" }));
-  return { windowId: result.window_id ?? windowId, blockId: created };
+export const openTerminal = Effect.fnUntraced(function*(session: SessionSelection, name: string, cwd: string, command: readonly string[], target?: LaunchPlan["target"]) {
+  const layout = terminalLayout(command, cwd, name);
+  let sessionId: SessionId;
+  let created: typeof RexCreatedSchema.Type | undefined;
+  if (session.kind === "new") {
+    const result = yield* parse(RexSessionCreatedSchema, yield* rex(["api", "call", "session.create", JSON.stringify({
+      label: session.name, initial_windows: [{ window_label: name, layout }]
+    })]));
+    sessionId = result.session_id;
+    created = result.initial_windows[0];
+  } else if (target) {
+    sessionId = session.id;
+    const result = yield* parse(RexSplitCreatedSchema, yield* rex(["api", "call", "-s", sessionId, "session.new_split", JSON.stringify({
+      session_id: sessionId, anchor_id: target.blockId, direction: "horizontal", side: "after", layout, focus: true
+    })]));
+    created = { window_id: target.windowId, block_ids: result.block_ids };
+  } else {
+    sessionId = session.id;
+    created = yield* parse(RexCreatedSchema, yield* rex(["api", "call", "-s", sessionId, "session.new_window", JSON.stringify({
+      session_id: sessionId, window_label: name, layout, focus: true
+    })]));
+  }
+  const blockId = created?.block_ids[0];
+  if (!created || !blockId) return yield* Effect.fail(new AppError({ message: "Rex did not return the created window and terminal" }));
+  return { sessionId, windowId: created.window_id, blockId };
 });
 
-export const focus = Effect.fnUntraced(function*(sessionId: SessionId, windowId: WindowId, clientId?: ClientId, blockId?: BlockId) {
+export const taskContext = Effect.fnUntraced(function*(session: SessionSelection, settings: RexTaskSettings, expectedHostId: ServerHostId) {
+  const path = yield* Path.Path;
+  if (settings.rexBinDir) {
+    if (!path.isAbsolute(settings.rexBinDir)) return yield* Effect.fail(new AppError({ message: "REX_BIN_DIR must be absolute" }));
+    process.env.REX_BIN_DIR = settings.rexBinDir;
+  }
+  if (settings.rexLocalEndpoint) process.env.REX_WORKTREES_LOCAL_ENDPOINT = settings.rexLocalEndpoint;
+  const { REX_SESSION: sessionId, REX_BLOCK: blockId } = yield* Schema.decodeUnknownEffect(RexTaskIdentitySchema)(process.env);
+  if (session.kind === "existing" && session.id !== sessionId)
+    return yield* Effect.fail(new AppError({ message: "Task must run in its requested Rex session and terminal" }));
+  if ((yield* localHost).id !== expectedHostId || !(yield* localBlockWindow(sessionId, blockId)))
+    return yield* Effect.fail(new AppError({ message: "Task must run in a placed terminal on its requested Rex host" }));
+  return { sessionId, blockId };
+});
+
+export const focus = Effect.fnUntraced(function*(sessionId: SessionId, windowId: WindowId, blockId: BlockId, clientId?: ClientId) {
   const warnings: string[] = [];
-  yield* rex(["focus", "-s", sessionId, windowId]).pipe(Effect.catch((error) => Effect.sync(() => { warnings.push(Cause.pretty(Cause.fail(error))); })));
-  if (clientId) {
-    yield* rex(["-C", clientId, "do", "session.select", `session_id=${sessionId}`, `window_id=${windowId}`])
-      .pipe(Effect.catch((error) => Effect.sync(() => { warnings.push(`Could not focus Rex app: ${Cause.pretty(Cause.fail(error))}`); })));
-  }
-  if (blockId) {
-    yield* rex(["focus", "-s", sessionId, "-w", windowId, blockId])
-      .pipe(Effect.catch((error) => Effect.sync(() => { warnings.push(`Could not focus Rex pane: ${Cause.pretty(Cause.fail(error))}`); })));
-  }
+  yield* rex(["api", "call", "-s", sessionId, "session.focus_block", JSON.stringify({ session_id: sessionId, block_id: blockId })])
+    .pipe(Effect.catch(error => Effect.sync(() => { warnings.push(`Could not focus Rex pane: ${Cause.pretty(Cause.fail(error))}`); })));
+  if (clientId) yield* rex(["api", "call", "client.perform", JSON.stringify({
+    client_id: clientId, action: "session.select", args: { session_id: sessionId, window_id: windowId }
+  })]).pipe(Effect.catch(error => Effect.sync(() => { warnings.push(`Could not focus Rex app: ${Cause.pretty(Cause.fail(error))}`); })));
   return warnings.length ? warnings.join("; ") : undefined;
 });
 
@@ -157,12 +183,7 @@ const findPane = (node: RexLayoutNode | null, blockId: BlockId): RexLayoutNode |
     : node.split ? findPane(node.split.before, blockId) ?? findPane(node.split.after, blockId) : undefined;
 
 export const openPopup = Effect.fnUntraced(function*(command: readonly string[], sessionId: SessionId, origin: PopupOrigin = {}) {
-  const path = yield* Path.Path;
-  const endpoint = (yield* localIdentity).endpoint;
-  const program = yield* binary(path);
-  const localRex = (args: readonly string[]) =>
-    run(program, ["-S", endpoint, "--autostart=false", ...args], undefined, nativeEnv());
-  const view = yield* parse(RexViewSchema, yield* localRex(["api", "call", "-s", sessionId, "session.view", JSON.stringify({ session_id: sessionId })]));
+  const view = yield* parse(RexViewSchema, yield* rex(["api", "call", "-s", sessionId, "session.view", JSON.stringify({ session_id: sessionId })]));
   const source = origin.blockId ? view.windows.find(window =>
     window.layers.some(layer => layer.blocks.some(block => block.block_id === origin.blockId))) : undefined;
   if (origin.blockId && !source) return yield* Effect.fail(new AppError({ message: "Source pane is no longer in the selected Rex session" }));
@@ -172,10 +193,9 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
     return yield* Effect.fail(new AppError({ message: "No active Rex window for the popup" }));
   }
   const sourceOwner = source?.layers.flatMap(layer => layer.blocks).find(block => block.block_id === origin.blockId)?.owner;
-  const clients = (yield* parse(RexClientsSchema, yield* localRex(["client", "ls", "--json"]))).clients
-    .filter(client => client.info?.kind === "app" && client.connection_state === "connected");
-  const clientId = [sourceOwner, origin.clientId].find(id => id && clients.some(client => client.client_id === id));
-  const popupCommand = clientId ? [...command, "--managed-popup", "--origin-client", clientId] : [...command, "--managed-popup"];
+  const clients = yield* listClients;
+  const clientId = [sourceOwner, origin.clientId].find(id => id && clients.some(client => client.id === id));
+  const popupCommand = clientId ? [...command, "--origin-client", clientId] : command;
   const blocks = window.layers.flatMap(layer => layer.blocks);
   const terminals = blocks.filter(block => block.flavor === "com.superlogical.terminal.shell");
   const terminal = terminals.find(block => block.block_id === origin.blockId)
@@ -185,7 +205,7 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
   if (terminal) {
     const pane = window.layers.map(layer => findPane(layer.layout, terminal.block_id)).find(node => node !== undefined);
     if (!pane) return yield* Effect.fail(new AppError({ message: "Rex terminal geometry changed before opening the popup" }));
-    const size = yield* parse(RexTerminalSizeSchema, yield* localRex(["block", "call", "-s", sessionId, "-b", terminal.block_id, "size"]));
+    const size = yield* parse(RexTerminalSizeSchema, yield* rex(["block", "call", "-s", sessionId, "-b", terminal.block_id, "size"]));
     const zoomed = window.zoomed_block_id === terminal.block_id;
     // Native title-bar chrome needs one more row than the side insets.
     width = Math.min(1, (popupSize.columns + 2) * (zoomed ? 1 : pane.rect[2]) / size.columns);
@@ -194,28 +214,9 @@ export const openPopup = Effect.fnUntraced(function*(command: readonly string[],
   const args = {
     session_id: sessionId, window_id: windowId,
     bounds: [(1 - width) / 2, (1 - height) / 2, width, height],
-    layout: { block: { flavor: "com.superlogical.terminal.shell", options: { command: commandWithPath(popupCommand), shell: "none", cwd: process.cwd(), size: popupSize, exit: { on_completion: true } } } }, focus: true
+    layout: terminalLayout(popupCommand, process.cwd(), "Worktrees", true, popupSize), focus: true
   };
-  const created = yield* parse(RexLayerSchema, yield* localRex(["api", "call", "-s", sessionId, "session.new_layer", JSON.stringify(args)]));
+  const created = yield* parse(RexLayerSchema, yield* rex(["api", "call", "-s", sessionId, "session.new_layer", JSON.stringify(args)]));
   if (!created.layer_id || !created.block_ids?.some(Boolean)) return yield* Effect.fail(new AppError({ message: "Rex did not return a floating terminal layer" }));
   return created;
-});
-
-export const closeManagedPopup = Effect.gen(function*() {
-  const sessionId = process.env.REX_SESSION === undefined ? undefined : yield* Schema.decodeUnknownEffect(SessionIdSchema)(process.env.REX_SESSION);
-  const blockId = process.env.REX_BLOCK === undefined ? undefined : yield* Schema.decodeUnknownEffect(BlockIdSchema)(process.env.REX_BLOCK);
-  if (!sessionId || !blockId) {
-    return yield* Effect.fail(new AppError({ message: "Cannot close managed Rex popup without its own session and block" }));
-  }
-  const path = yield* Path.Path;
-  const endpoint = (yield* localIdentity).endpoint;
-  const program = yield* binary(path);
-  const localRex = (args: readonly string[]) =>
-    run(program, ["-S", endpoint, "--autostart=false", ...args], undefined, nativeEnv());
-  const view = yield* parse(RexViewSchema, yield* localRex(["api", "call", "-s", sessionId, "session.view", JSON.stringify({ session_id: sessionId })]));
-  if (!view.windows.some(window => window.layers.some(layer =>
-    layer.blocks.some(block => block.block_id === blockId)))) {
-    return yield* Effect.fail(new AppError({ message: "Managed Rex popup block is no longer in its own session" }));
-  }
-  yield* localRex(["block", "close", "-s", sessionId, blockId]);
-});
+}, withLocalIdentity);

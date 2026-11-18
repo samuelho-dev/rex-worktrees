@@ -3,9 +3,16 @@ import { loadConfig, resolveCloneRoot, resolveWorktreeRoot } from "./config.ts";
 import { cloneSource as gitCloneSource, listBranches, listWorktrees as listGitWorktrees, missing, notRepository } from "./git.ts";
 import { repository, project, discoverProjects } from "./repositories.ts";
 import * as jj from "./jj.ts";
-import { AppError, RequestSchema, type Request, type RequestIdentity, type Response } from "./contracts.ts";
+import { AppError, RequestSchema, type Request, type RequestIdentity, type Response, type Repository } from "./contracts.ts";
 import { listClients, listSessions, localHost, withLocalIdentity } from "./rex.ts";
 import { launch, launchClone, planClone, planLaunch } from "./worktrees.ts";
+
+const checkoutInventory = (repo: Repository) => Effect.all({
+  worktrees: repo.vcs === "git" ? listGitWorktrees(repo.path) : jj.listWorkspaces(repo.path),
+  branches: repo.vcs === "git" ? listBranches(repo.path) : Effect.succeed([]),
+  revisions: repo.vcs === "jj" ? jj.listRevisions(repo.path) : Effect.succeed([]),
+  worktreeRoot: resolveWorktreeRoot(repo.path)
+}, { concurrency: 4 });
 
 export const dispatchHost = Effect.fnUntraced(function*(request: Request, command: readonly string[]) {
   const host = yield* localHost;
@@ -17,7 +24,7 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
         : request.kind === "plan" || request.kind === "launch" ? [request.input.repo, ...(request.input.path ? [request.input.path] : [])]
           : [request.repo];
   if (paths.some(value => !path.isAbsolute(value))) return yield* Effect.fail(new AppError({ message: "Destination repository and worktree paths must be absolute" }));
-  const identity: RequestIdentity = { version: 4, hostId: host.id };
+  const identity: RequestIdentity = { version: 5, hostId: host.id };
   let result: Response;
   switch (request.kind) {
     case "sessions": {
@@ -51,12 +58,7 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
       }
       const checkout = yield* repository(request.path);
       const canonical = yield* project(request.path);
-      const inventory = yield* Effect.all({
-        worktrees: canonical.vcs === "git" ? listGitWorktrees(canonical.path) : jj.listWorkspaces(canonical.path),
-        branches: canonical.vcs === "git" ? listBranches(canonical.path) : Effect.succeed([]),
-        revisions: canonical.vcs === "jj" ? jj.listRevisions(canonical.path) : Effect.succeed([]),
-        worktreeRoot: resolveWorktreeRoot(canonical.path)
-      }, { concurrency: 4 });
+      const inventory = yield* checkoutInventory(canonical);
       result = {
         ...identity, kind: "project", project: canonical, checkout,
         ...inventory
@@ -73,12 +75,7 @@ export const dispatchHost = Effect.fnUntraced(function*(request: Request, comman
     }
     case "worktrees": {
       const repo = yield* repository(request.repo);
-      const inventory = yield* Effect.all({
-        worktrees: repo.vcs === "git" ? listGitWorktrees(repo.path) : jj.listWorkspaces(repo.path),
-        branches: repo.vcs === "git" ? listBranches(repo.path) : Effect.succeed([]),
-        revisions: repo.vcs === "jj" ? jj.listRevisions(repo.path) : Effect.succeed([]),
-        worktreeRoot: resolveWorktreeRoot(repo.path)
-      }, { concurrency: 4 });
+      const inventory = yield* checkoutInventory(repo);
       result = {
         ...identity, kind: "worktrees", repository: repo,
         ...inventory

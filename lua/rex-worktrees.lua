@@ -29,13 +29,16 @@ function M.setup(opts)
   if type(config.projects) == "table" and next(config.projects) == nil then config.projects = nil end
   local settings = rex.json.encode({ config = config, directory = config_dir })
 
+  local function exec_options(stdin)
+    local options = { stdin = stdin, timeout = 20, env = { REX_WORKTREES_CONFIG = settings } }
+    if rex_bin_dir then options.env.REX_BIN_DIR = rex_bin_dir end
+    if installed_path_env ~= false then options.env.PATH = installed_path_env end
+    options.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT")
+    return options
+  end
+
   local function worktrees_request(request)
-    local exec_opts = { stdin = request, timeout = 20, env = {} }
-    exec_opts.env.REX_WORKTREES_CONFIG = settings
-    if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
-    if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
-    if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
-    local result, run_err = rex.exec({ bin, "host-request" }, exec_opts)
+    local result, run_err = rex.exec({ bin, "host-request" }, exec_options(request))
     if not result then error(run_err, 0) end
     if not result.ok then
       error("rex-worktrees host-request failed (exit " .. tostring(result.code)
@@ -89,12 +92,7 @@ function M.setup(opts)
         table.insert(command, "--origin-client")
         table.insert(command, ctx.client_id)
       end
-      local exec_opts = { timeout = 20, env = {} }
-      exec_opts.env.REX_WORKTREES_CONFIG = settings
-      if rex_bin_dir then exec_opts.env.REX_BIN_DIR = rex_bin_dir end
-      if installed_path_env ~= false then exec_opts.env.PATH = installed_path_env end
-      if os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") then exec_opts.env.REX_WORKTREES_LOCAL_ENDPOINT = os.getenv("REX_WORKTREES_LOCAL_ENDPOINT") end
-      local result, run_err = rex.exec(command, exec_opts)
+      local result, run_err = rex.exec(command, exec_options())
       if not result then error(run_err, 0) end
       if not result.ok then
         error("rex-worktrees launch-popup failed: " ..

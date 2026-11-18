@@ -9,6 +9,7 @@ const fixture = vi.hoisted(() => ({
   pwd: "file://foreign.invalid/projects/current",
   blockHost: "local-host",
   identityHost: "local-host",
+  placement: "placed",
   calls: [] as string[],
 }));
 
@@ -20,7 +21,7 @@ vi.mock("../src/process.ts", async () => {
       const command = args.at(-1)!;
       fixture.calls.push(command);
       if (args.includes("whoami")) return JSON.stringify({ host_id: fixture.identityHost, endpoint: "unix:///tmp/rex.sock", principal: { transport: "unix" } });
-      if (args.includes("window")) return JSON.stringify({ windows: [{ window_id: "window", label: "window", layers: [{ blocks: [{ block_id: "block", host_id: fixture.blockHost }] }] }] });
+      if (args.includes("session.list_blocks")) return JSON.stringify({ blocks: [{ block_id: "block", host_id: fixture.blockHost, placement: fixture.placement, window_id: "window" }] });
       if (command === "pwd") return JSON.stringify({ pwd: fixture.pwd });
       if (command === "process") return JSON.stringify({ last_exit: null, foreground: { cwd: "/projects/current" } });
       throw new Error(`Unexpected Rex call: ${args.join(" ")}`);
@@ -48,4 +49,13 @@ it("selects a verified pane's foreground directory when its reported URI is not 
   expect(await origin()).toBeUndefined();
   expect(fixture.calls).not.toContain("pwd");
   expect(fixture.calls).not.toContain("process");
+
+  fixture.blockHost = fixture.identityHost;
+  for (const placement of ["detached", "future-placement"]) {
+    fixture.calls = [];
+    fixture.placement = placement;
+    expect(await origin()).toBeUndefined();
+    expect(fixture.calls).not.toContain("pwd");
+    expect(fixture.calls).not.toContain("process");
+  }
 });
