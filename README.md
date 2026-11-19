@@ -6,17 +6,15 @@ A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for openin
 
 ## Install
 
-Requires Rex and its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. Standalone builds support Apple Silicon macOS 15+ and Linux x64; no Bun runtime is needed.
+Requires Rex and its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. Standalone builds support Apple Silicon macOS 15+ and Linux x64; no separately installed Lua runtime is needed.
 
 **Install or update on macOS (Apple Silicon):**
 
 ```sh
-npm install -g rex-worktrees
-rex-worktrees setup
-rex config reload
+npx --yes rex-worktrees@latest setup && rex config reload
 ```
 
-npm installs the CLI; `setup` registers the Lua plugin with Rex and copies its executable to `~/.local/bin/rex-worktrees` for the plugin to use. No executable path is needed. Run setup from a shell that can find `rex`, `git`, and optionally `jj`; unrelated Rex settings are preserved. Repeat all three commands to update.
+The command installs the standalone executable and registers the Lua plugin with Rex. No executable path or global npm installation is needed. Run it from a shell that can find `rex`, `git`, and optionally `jj`; unrelated Rex settings are preserved. Rerun the command to update.
 
 **Without npm / Linux:** download your platform's archive from [GitHub Releases](https://github.com/samuelho-dev/rex-worktrees/releases/latest), verify it against `SHA256SUMS`, and extract it. From the extracted directory:
 
@@ -55,14 +53,14 @@ Shells and interactive Git/JJ clones stay attached to the destination terminal. 
 Rex owns terminal placement, focus, and popup cleanup. New sessions and their first terminal are created together; checkout/clone work then runs in that terminal independently of the chooser.
 Connection and review snapshots are operation-local: new sessions and forced new tabs skip reuse scans, and submission still checks fresh host and checkout state.
 
-| Key | Action |
-| --- | --- |
-| Tab / Shift+Tab | Move between fields and buttons |
-| ↑ / ↓ | Navigate fields or choices |
-| Enter | Edit a field, accept its value, or activate a focused button |
-| Ctrl+S | Submit the form; inside an editor, only accept that field |
-| Esc | Return from an editor to the form; from the form, close the popup |
-| PageUp / PageDown | Scroll long details |
+| Key               | Action                                                            |
+| ----------------- | ----------------------------------------------------------------- |
+| Tab / Shift+Tab   | Move between fields and buttons                                   |
+| ↑ / ↓             | Navigate fields or choices                                        |
+| Enter             | Edit a field, accept its value, or activate a focused button      |
+| Ctrl+S            | Submit the form; inside an editor, only accept that field         |
+| Esc               | Return from an editor to the form; from the form, close the popup |
+| PageUp / PageDown | Scroll long details                                               |
 
 Optional shortcut—add outside the managed section of your Rex config, then reload:
 
@@ -85,7 +83,7 @@ Both settings are optional. `projects` lists repositories explicitly; `roots` di
 
 ### Other machines
 
-Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine. This native-integration update uses helper protocol v5; update all execution machines together.
+Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine. The helper protocol is v5; update all execution machines together.
 
 If the selected machine lacks the project, the form proposes cloning it and shows the repository destination explicitly. **Directory** edits that path, and submission becomes **Clone & open**. Changing a field never starts a clone. The Worktree picker can also create a separate worktree after cloning; Directory then controls that worktree's path. Cloning opens a new tab. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
 
@@ -100,13 +98,14 @@ If the selected machine lacks the project, the form proposes cloning it and show
 
 Run `rex-worktrees --help` for direct `open` commands and host/session options. `rex-worktrees popup` runs the chooser in the current terminal.
 
-Build from source with Bun 1.3.13:
+Source builds require a C compiler, make, curl, tar, a SHA-256 utility, and network access to download pinned dependencies. Lua and native modules are built locally; an installed Lua is not required.
+Regression tests also require Git, JJ, and Python 3; Python is used only by the terminal test drivers.
+Compiled popup scenarios disable `LUA_PATH` and `LUA_CPATH` to catch missing bundled modules.
 
 ```sh
-bun install --frozen-lockfile
-bun run check
-bun run test
-bun run build
+make check
+make test
+make build
 ./dist/rex-worktrees setup
 rex config reload
 ```
@@ -119,20 +118,4 @@ Registry verification allows up to 120 checks, ten seconds apart, for npm proces
 
 ## License
 
-[MIT](LICENSE). Standalone builds embed Bun; see [third-party notices](licenses/THIRD-PARTY-NOTICES).
-
-<details>
-<summary>Runtime sources and rebuilding</summary>
-
-Release archives include the relinkable `rex-worktrees.js` bundle. Matching Bun 1.3.13, WebKit, and tinycc sources and checksums are in the [runtime-source release](https://github.com/samuelho-dev/rex-worktrees/releases/tag/v0.1.1). Extract all three source archives, placing WebKit at `bun-source/vendor/WebKit` and tinycc at `bun-source/vendor/tinycc` (strip each archive's top-level directory).
-
-Follow [Bun's build prerequisites](https://github.com/oven-sh/bun/blob/bun-1.3.13/CONTRIBUTING.md), then run in `bun-source`:
-
-```sh
-bun install --frozen-lockfile
-GIT_SHA=bf2e2cecf27e800962b1e7f03d66278f9d5d2e79 bun run build:release:local
-./build/release-local/bun build /absolute/path/to/rex-worktrees.js --compile --outfile /absolute/path/to/rex-worktrees-relinked
-codesign --force --sign - /absolute/path/to/rex-worktrees-relinked # macOS only
-```
-
-</details>
+[MIT](LICENSE)

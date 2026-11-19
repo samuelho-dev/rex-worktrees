@@ -23,9 +23,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          bun-version: 1.3.13
+          node-version: '24'
       - name: Verify runner architecture and release version
         shell: bash
         run: |
@@ -33,12 +33,12 @@ jobs:
             macos-arm64) test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64 ;;
             linux-x64) test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64 ;;
           esac
-          test "$(bun --version)" = 1.3.13
+          command -v cc
           if [[ "${{ matrix.platform }}" == linux-x64 ]]; then
             printf '2.42.0\n%s\n' "$(git version | cut -d' ' -f3)" | sort -V -C
           fi
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            version="$(bun -p 'require("./package.json").version')"
+            version="$(node -p 'require("./package.json").version')"
             test "$GITHUB_REF_NAME" = "v$version"
           fi
       - name: Install verified JJ 0.46.0
@@ -59,17 +59,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/jj-bin"
           tar -xzf "$RUNNER_TEMP/jj.tar.gz" -C "$RUNNER_TEMP/jj-bin" ./jj
           echo "$RUNNER_TEMP/jj-bin" >> "$GITHUB_PATH"
-      - run: bun install --frozen-lockfile
-      - run: bun run check
-      - run: bun run test
-      - name: Compile native executable
-        shell: bash
-        run: |
-          if [[ "${{ matrix.platform }}" == linux-x64 ]]; then
-            bun build src/main.ts --compile --target=bun-linux-x64-baseline --define REX_WORKTREES_COMPILED=true --outfile dist/rex-worktrees
-          else
-            bun run build
-          fi
+      - run: make check test
       - name: Verify portable signed macOS ARM64 executable
         if: matrix.platform == 'macos-arm64'
         run: |
@@ -93,6 +83,12 @@ jobs:
         run: |
           file dist/rex-worktrees | grep -q 'ELF 64-bit LSB.*x86-64'
           readelf -h dist/rex-worktrees | grep -q 'Machine:.*Advanced Micro Devices X86-64'
+          readelf -d dist/rex-worktrees | grep '(NEEDED)' | while IFS= read -r dependency; do
+            case "$dependency" in
+              *'[libc.so.6]'*|*'[libm.so.6]'*|*'[libdl.so.2]'*|*'[librt.so.1]'*) ;;
+              *) echo "Unexpected shared dependency: $dependency" >&2; exit 1 ;;
+            esac
+          done
           dist/rex-worktrees help | grep -q 'rex-worktrees'
           if printf '{' | dist/rex-worktrees host-request >/dev/null 2>&1; then
             echo 'Malformed JSON was accepted' >&2
@@ -103,9 +99,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun build src/main.ts --target=bun --define REX_WORKTREES_COMPILED=true --outfile dist/rex-worktrees.js
-          GITHUB_REF_NAME="v$(bun -p 'require("./package.json").version')" npm pack --ignore-scripts --json > pack.json
-          GITHUB_REF_NAME="v$(bun -p 'require("./package.json").version')" node scripts/publish-npm.mjs --dry-run
+          GITHUB_REF_NAME="v$(node -p 'require("./package.json").version')" npm pack --ignore-scripts --json > pack.json
+          GITHUB_REF_NAME="v$(node -p 'require("./package.json").version')" node scripts/publish-npm.mjs --dry-run
       - name: Pack platform release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -114,8 +109,7 @@ jobs:
           mkdir -p release/licenses
           cp dist/rex-worktrees LICENSE README.md release/
           cp licenses/THIRD-PARTY-NOTICES release/licenses/
-          bun build src/main.ts --target=bun --define REX_WORKTREES_COMPILED=true --outfile release/rex-worktrees.js
-          tar -czf "$archive" -C release rex-worktrees rex-worktrees.js README.md LICENSE licenses/THIRD-PARTY-NOTICES
+          tar -czf "$archive" -C release rex-worktrees README.md LICENSE licenses/THIRD-PARTY-NOTICES
           shasum -a 256 "$archive" > "rex-worktrees-${{ matrix.platform }}.sha256"
           shasum -a 256 -c "rex-worktrees-${{ matrix.platform }}.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -160,7 +154,7 @@ jobs:
           sha256sum -c rex-worktrees-macos-arm64.sha256
           mkdir -p npm-package/dist
           tar -xzf rex-worktrees-macos-arm64.tar.gz -C npm-package
-          mv npm-package/rex-worktrees npm-package/rex-worktrees.js npm-package/dist/
+          mv npm-package/rex-worktrees npm-package/dist/
           cp package.json npm-package/
           cd npm-package
           npm pack --ignore-scripts --json > pack.json
@@ -190,4 +184,4 @@ jobs:
           sha256sum -c SHA256SUMS
           gh release create "$GITHUB_REF_NAME" rex-worktrees-macos-arm64.tar.gz rex-worktrees-linux-x64.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes 'Native macOS ARM64 and Linux x64 standalone executables, relinkable bundles, README, MIT license, and third-party notices in each archive. Git 2.42+ and JJ 0.46+ are required for JJ integration on each host. Matching Bun 1.3.13 runtime sources from v0.1.1: [Bun](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-1.3.13-source.tar.gz), [WebKit/JavaScriptCore](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-webkit-source.tar.gz), [tinycc](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/bun-tinycc-source.tar.gz); verify them against [v0.1.1 SHA256SUMS](https://github.com/samuelho-dev/rex-worktrees/releases/download/v0.1.1/SHA256SUMS). This release SHA256SUMS covers both application archives.'
+            --notes 'Native macOS ARM64 and Linux x64 standalone executables, README, MIT license, and third-party notices in each archive. Git 2.42+ and JJ 0.46+ are required for JJ integration on each host.'
