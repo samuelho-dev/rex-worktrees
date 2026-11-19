@@ -13,7 +13,7 @@ if (metadata.name !== "rex-worktrees" || packed.name !== metadata.name || packed
 }
 const integrity = `sha512-${createHash("sha512").update(readFileSync(packed.filename)).digest("base64")}`;
 if (packed.integrity !== integrity) throw new Error("Packed archive integrity mismatch");
-const expectedFiles = ["package.json", "README.md", "LICENSE", "licenses/THIRD-PARTY-NOTICES", "dist/rex-worktrees", "dist/rex-worktrees.js"].sort();
+const expectedFiles = ["package.json", "README.md", "LICENSE", "licenses/THIRD-PARTY-NOTICES", "dist/rex-worktrees"].sort();
 if (JSON.stringify(packed.files.map(file => file.path).sort()) !== JSON.stringify(expectedFiles)) {
   throw new Error("Unexpected npm package contents");
 }
