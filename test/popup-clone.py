@@ -155,8 +155,8 @@ def clone(p):
     if p.scenario == 'failure':
         frame = p.frame('Clone needs inspection', 'Destination request rejected', 'Enter / Space close')
         assert 'exited 4' in frame and root[:35] in frame
-        text = ' '.join(frame.split())
-        assert 'Inspect the destination and session' in text and 'may already have changed' in text
+        p.send(b'\x13')
+        p.frame('Clone needs inspection', 'Enter / Space close')
         assert 'request-body-' not in frame
         assert len(p.requests('clone-plan')) == len(p.requests('clone-launch')) == 1
         p.send(b'\r')

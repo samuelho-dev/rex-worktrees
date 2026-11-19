@@ -253,13 +253,14 @@ function M.planWorktree(repoPath, branch, root, name, resolved, worktrees)
     if not main and not tree.bare then main = tree end
   end
   if not main then system.fail("No main checkout exists") end
+  local primary = main.path == repo.path and repo or M.repository(main.path)
   local paths = {}
   for _, tree in ipairs(trees) do
-    paths[#paths + 1] = tree.path
+    paths[#paths + 1] = tree == main and primary.path or tree.path
   end
   return {
     repository = repo,
-    path = require("checkout").planCheckoutPath(main.path, { repo.commonDir }, paths, name or branch, root),
+    path = require("checkout").planCheckoutPath(primary.path, { repo.commonDir }, paths, name or branch, root),
     branch = branch,
     existing = false,
   }

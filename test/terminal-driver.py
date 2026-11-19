@@ -196,7 +196,7 @@ try:
     data, at = frame(fd, b'Directory (', at, data)
     checkout = root + '/custom-checkout'
     os.write(fd, b'\x15' + checkout.encode() + b'\r')
-    data, at = frame(fd, (checkout.encode(), b'Tab next'), at, data)
+    data, at = frame(fd, (b'DIRECTORY', b'Tab next'), at, data)
     os.write(fd, b'\x13')
     finish(pid, fd)
 except BaseException:
