@@ -315,6 +315,7 @@ define("ChooserState", {
   origin = shape({ sessionId = optional(S), blockId = optional(S), clientId = optional(S), server = optional(S) }),
   originMachine = optional(S),
   projects = array(A),
+  projectsLoaded = optional(B),
   sessions = array(A),
   cloneRoot = S,
   editor = optional(shape({
@@ -337,7 +338,13 @@ define("ChooserResponse", {
   confirmation = optional(shape({ title = S, detail = S })),
   done = optional(B), result = optional(union(launchResult, cloneResult)),
 })
-define("RexIdentity", { host_id = S, endpoint = S, principal = shape({ transport = S }) })
+define("RexIdentity", {
+  host_id = S, endpoint = S, principal = shape({ transport = S }),
+  tailscale = optional(nullable(shape({ https = optional(nullable(shape({ url = optional(S) }))) }))),
+})
+define("RexHosts", {
+  hosts = nullable(array(shape({ label = S, endpoints = array(S), host_id = optional(S) }))),
+})
 define("RexSessions", { sessions = array(shape({ session_id = S, label = S })) })
 define("RexCreated", { window_id = S, block_ids = array(S) })
 define("RexSplitCreated", { block_ids = array(S) })

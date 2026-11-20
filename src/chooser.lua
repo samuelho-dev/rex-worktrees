@@ -159,6 +159,7 @@ function M.cloneInputFor(d)
 end
 
 local client = require("client")
+local rex = require("rex")
 local contracts = require("contracts")
 local json = runtime.json
 
@@ -179,7 +180,6 @@ end
 
 local function originDirectory(machine, origin)
   if not (origin.sessionId and origin.blockId) then return nil end
-  local rex = require("rex")
   if machine["local"] then return rex.originDirectory(origin.sessionId, origin.blockId) end
   local host = client.connectMachine(machine)
   local function call(method, schema)
@@ -287,7 +287,18 @@ end
 
 local function activate(state, command, machine, context)
   local previous = state.draft
-  local found = client.connectAndDiscover(machine, command, context)
+  local found, initial
+  if context then
+    local host = client.connectMachine(machine)
+    local ok, value = pcall(client.inspectProject, host, command, context)
+    if ok then
+      initial = value
+      found = client.inspectSessions(host, command)
+      found.host, found.checkout, found.projects = host, value.checkout, json.array({ value.project })
+    end
+  end
+  found = found or client.connectAndDiscover(machine, command, context)
+  state.projectsLoaded = initial == nil
   local host = found.host
   local preserve = previous.machine and previous.machine.key == machine.key and previous.host
     and previous.host.hostId == host.hostId
@@ -320,7 +331,7 @@ local function activate(state, command, machine, context)
   local choice = previous.projectChoice
   local result
   if not choice and present(found.checkout) and context then
-    result = { found = client.inspectProject(host, command, found.checkout.path) }
+    result = { found = initial or client.inspectProject(host, command, found.checkout.path) }
     choice = known(host, result.found.project, result.found.checkout)
   elseif choice then
     result = bind(state, command, choice, host, found.projects or {})
@@ -395,13 +406,14 @@ local function openField(state, command, field)
     if row.id == field and (row.disabled or row.isReadOnly) then runtime.fail("This field is not editable") end
   end
   if field == "project" then
+    if not state.projectsLoaded then activate(state, command, d.machine) end
     for _, item in ipairs(state.projects) do
       addChoice(choices, item, item.name, (item.source and item.source.repository.path or item.path or "") .. " · Source machine")
     end
     editor(state, field, "Project", choices, true)
   elseif field == "machine" then
-    for _, item in ipairs(client.listMachines()) do
-      addChoice(choices, item, item.label, item["local"] and "This machine" or "Rex host · " .. item.selector)
+    for _, item in ipairs(client.listMachines(state.originMachine)) do
+      addChoice(choices, item, item.label, item.key == state.originMachine and "Current terminal" or "Rex host · " .. item.label)
     end
     editor(state, field, "Execution machine", choices, false)
   elseif field == "session" then
@@ -687,6 +699,10 @@ function M.request(request, command)
     response.confirmation.detail = safe(response.confirmation.detail)
   end
   return contracts.validate("ChooserResponse", response)
+end
+local request = M.request
+function M.request(args, command)
+  return rex.withOperation(function() return request(args, command) end)
 end
 
 return M

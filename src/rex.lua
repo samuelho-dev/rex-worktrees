@@ -14,6 +14,12 @@ function M.withOperation(fn)
   return table.unpack(result, 2, result.n)
 end
 
+local function cached(key, read, ...)
+  if not operation or operation.pid ~= system.pid() then return read(...) end
+  if operation[key] == nil then operation[key] = read(...) end
+  return operation[key]
+end
+
 local function name(value) return value:lower():gsub("%.$", ""):gsub("%.local$", "") end
 function M.localDirectoryUri(raw)
   if type(raw) ~= "string" or raw:find("\0", 1, true) then return nil end
@@ -50,7 +56,8 @@ local function append(into, from)
   end
   return into
 end
-function M.machinesRegistry() return contracts.decode("RexRegistry", run({ "hosts", "list", "--json" })) end
+local function readRegistry() return contracts.decode("RexRegistry", run({ "hosts", "list", "--json" })) end
+function M.machinesRegistry() return cached("registry", readRegistry) end
 local function readLocalIdentity()
   local endpoint = system.getenv("REX_WORKTREES_LOCAL_ENDPOINT")
   if endpoint and endpoint:sub(1, 8) ~= "unix:///" then
@@ -70,11 +77,7 @@ local function readLocalIdentity()
   end
   return identity
 end
-local function localIdentity()
-  if not operation or operation.pid ~= system.pid() then return readLocalIdentity() end
-  if not operation.identity then operation.identity = readLocalIdentity() end
-  return operation.identity
-end
+local function localIdentity() return cached("identity", readLocalIdentity) end
 function M.rex(args)
   local endpoint = system.getenv("REX_WORKTREES_LOCAL_ENDPOINT")
   if endpoint and endpoint:sub(1, 8) ~= "unix:///" then
@@ -88,10 +91,20 @@ end
 function M.remoteRex(selector, args)
   return run(append({ "-S", selector, "--autostart=false", "--timeout", "30s" }, args))
 end
-function M.remoteIdentity(selector)
+local function remoteIdentity(selector)
   return contracts.decode("RexIdentity", M.remoteRex(selector, { "whoami", "--json" }))
 end
-function M.localHost() return { id = localIdentity().host_id, label = "This machine" } end
+function M.remoteIdentity(selector) return cached("identity:" .. selector, remoteIdentity, selector) end
+local function remoteActions(selector)
+  return contracts.decode("RexActions", M.remoteRex(selector, { "actions", "--json" }))
+end
+function M.remoteActions(selector) return cached("actions:" .. selector, remoteActions, selector) end
+function M.localHost()
+  local identity = localIdentity()
+  local https = identity.tailscale and not system.isNull(identity.tailscale) and identity.tailscale.https
+  return { id = identity.host_id, label = "This machine",
+    endpoint = https and not system.isNull(https) and https.url or identity.endpoint }
+end
 function M.listSessions()
   local result = json.array()
   for _, item in ipairs(contracts.decode("RexSessions", M.rex({ "ls", "--json" })).sessions) do

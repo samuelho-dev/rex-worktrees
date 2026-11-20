@@ -11,9 +11,10 @@ for arg in "$@"; do last="$arg"; done
 printf '%s\n' "$last" >> "$REX_TEST_LOG"
 case " $* " in
   *' -S Remote '*' whoami '*) printf '{"host_id":"%s","endpoint":"%s","principal":{"transport":"unix"}}\n' "${REX_TEST_REMOTE_HOST:-remote-host}" "${REX_TEST_REMOTE_ENDPOINT:-unix:///remote-one}" ;;
+  *' hosts.list '*) echo '{"hosts":[{"label":"Mac","endpoints":["https://fixture.test"]}]}' ;;
   *' hosts list '*) printf '{"home":{"label":"Local","endpoint":"unix:///fixture.sock","this_machine":true},"hosts":[{"host":{"id":"remote-id","label":"Remote","endpoints":["%s"]}}]}\n' "${REX_TEST_REGISTERED_ENDPOINT:-unix:///remote-one}" ;;
   *' actions '*) echo '{"actions":[{"name":"worktrees_request","args":{"properties":{"request":{"type":"string"}}}}]}' ;;
-  *' whoami '*) echo '{"host_id":"fixture-host","endpoint":"unix:///fixture.sock","principal":{"transport":"unix"}}' ;;
+  *' whoami '*) echo '{"host_id":"fixture-host","endpoint":"unix:///fixture.sock","principal":{"transport":"unix"},"tailscale":{"https":{"url":"https://fixture.test"}}}' ;;
   *' session.list_blocks '*) printf '{"blocks":[{"block_id":"block","host_id":"%s","placement":"%s","window_id":"%s"}]}\n' "${REX_TEST_BLOCK_HOST:-fixture-host}" "${REX_TEST_PLACEMENT:-placed}" "${REX_TEST_WINDOW:-window}" ;;
   *' ls '*) echo '{"sessions":[{"session_id":"session","label":"Same label"}]}' ;;
   *' session.focus_block '*) echo '{}' ;;
@@ -37,15 +38,27 @@ esac
   assert(posix.setenv("REX_WORKTREES_LOCAL_ENDPOINT", "unix:///fixture.sock", true))
   local client = require("client")
   local remote = { key = "remote-id", label = "Remote", ["local"] = false, selector = "Remote" }
-  assert(client.connectMachine(remote).hostId == "remote-host")
+  local function connected() return rex.withOperation(function() return client.connectMachine(remote) end) end
+  assert(connected().hostId == "remote-host")
   assert(posix.setenv("REX_TEST_REMOTE_ENDPOINT", "unix:///remote-two", true))
   assert(posix.setenv("REX_TEST_REMOTE_HOST", "remote-host-2", true))
-  assert(not pcall(client.connectMachine, remote))
+  assert(not pcall(connected))
   assert(posix.setenv("REX_TEST_REGISTERED_ENDPOINT", "unix:///remote-two", true))
-  assert(client.connectMachine(remote).hostId == "remote-host-2")
+  assert(connected().hostId == "remote-host-2")
   assert(posix.setenv("REX_TEST_REMOTE_ENDPOINT", nil))
   assert(posix.setenv("REX_TEST_REGISTERED_ENDPOINT", nil))
   assert(posix.setenv("REX_TEST_REMOTE_HOST", nil))
+  local chooser = require("chooser")
+  local machineDraft = s.json.encode({
+    draft = { mode = "auto" }, origin = s.json.object(), originMachine = "remote-id",
+    projects = s.json.array(), sessions = s.json.array(), cloneRoot = "",
+  })
+  local machines = chooser.request({ op = "edit", field = "machine", state = machineDraft }, {})
+  assert(not machines.error and machines.editor.items[1].title == "Mac")
+  assert(machines.editor.items[2].title == "Remote" and machines.editor.items[2].detail == "Current terminal")
+  local selected = chooser.request({ op = "accept", state = machines.state, id = machines.editor.items[1].id }, {})
+  assert(not selected.error and selected.rows[2].value == "Mac")
+  assert(s.json.decode(selected.state).draft.host.hostId == "fixture-host")
   assert(rex.originDirectory("session", "block") == "/projects/current")
   assert(posix.setenv("REX_TEST_PWD", "file://localhost/projects/reported", true))
   assert(rex.originDirectory("session", "block") == "/projects/reported")
@@ -102,6 +115,26 @@ esac
   s.fs.writeFileString(repo .. "/tracked", "base\n")
   git("add", "tracked")
   git("commit", "-m", "base")
+  local previousConfig = s.getenv("REX_WORKTREES_CONFIG")
+  local scanRoot = root .. "/projects"
+  s.fs.makeDirectory(scanRoot .. "/broken", { recursive = true })
+  s.fs.writeFileString(scanRoot .. "/broken/.git", "invalid gitfile\n")
+  assert(posix.setenv("REX_WORKTREES_CONFIG", s.json.encode({
+    directory = root, config = { roots = s.json.array({ scanRoot }) },
+  }), true))
+  local started = chooser.request({ op = "start", context = repo }, {})
+  assert(not started.error and not started.submitDisabled)
+  assert(started.rows[5].value == "main" and started.rows[6].value == repo)
+  local unavailable = chooser.request({ op = "edit", field = "project", state = started.state }, {})
+  assert(unavailable.error and not unavailable.editor)
+  s.fs.remove(scanRoot .. "/broken/.git")
+  s.run("git", { "init", "-b", "main", scanRoot .. "/other" })
+  local projects = chooser.request({ op = "edit", field = "project", state = started.state }, {})
+  assert(not projects.error and projects.editor)
+  local hasOther = false
+  for _, item in ipairs(projects.editor.items) do if item.title == "other" then hasOther = true end end
+  assert(hasOther and projects.rows[5].value == "main" and projects.rows[6].value == repo)
+  assert(posix.setenv("REX_WORKTREES_CONFIG", previousConfig, true))
   local redirected = {
     vcs = "git",
     repo = repo,
