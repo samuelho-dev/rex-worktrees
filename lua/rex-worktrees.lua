@@ -244,7 +244,7 @@ function M.setup(opts)
           local title = response.error or response.notice or "Open Worktree"
           local choice, why, detail = rex.ui.pick{
             title = title, items = items, allow_other = true,
-            placeholder = "Type a new worktree name, or select a setting", confirm = "Create & open",
+            placeholder = "Type a worktree name or GitHub URL, or select a setting", confirm = "Create or clone & open",
           }
           if choice == nil then no_answer(why, detail); return end
           if type(choice) == "table" and type(choice.text) == "string" then

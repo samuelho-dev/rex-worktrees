@@ -26,6 +26,63 @@ return function(root)
   fs.writeFileString(source .. "/tracked", "staged\n")
   at("add", "tracked")
   fs.writeFileString(source .. "/tracked", "dirty\n")
+  for _, url in ipairs({
+    "https://github.com/Owner/Repo.git/", "git@github.com:Owner/Repo.git", "ssh://git@github.com/Owner/Repo",
+  }) do
+    local parsed = assert(git.githubRepository(url))
+    assert(parsed.name == "Repo" and parsed.identity == "owner/repo" and parsed.url == url:gsub("/$", ""))
+  end
+  for _, url in ipairs({
+    "https://user@github.com/a/b", "https://github.com/a/b/tree/main", "https://github.com/a/b?x=1",
+    "https://github.com/a/b#fragment", "https://github.com/../b", "https://github.com/a/.git",
+    "ssh://other@github.com/a/b", "git@github.com:a/b/", "https://github.com/a/b//",
+  }) do
+    assert(not git.githubRepository(url), url)
+  end
+  cmd("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/published")
+  local defaultRepo = dir .. "/remote-default"
+  local defaultPlan = {
+    vcs = "git", hostId = "fixture-host", repo = defaultRepo, existing = false, label = "Clone & Open",
+    input = {
+      vcs = "git", source = { vcs = "git", url = bare, sourceHostId = "fixture-host" },
+      repo = defaultRepo, session = { kind = "existing", id = "session" }, name = "Task",
+      checkout = "primary", branchMode = "default",
+    },
+  }
+  assert(worktrees.prepareCloneCheckout(defaultPlan).cwd == defaultRepo)
+  assert(cmd("-C", defaultRepo, "branch", "--show-current"):match("%S+") == "published")
+  cmd("-C", defaultRepo, "checkout", "--detach")
+  local detachedHead = cmd("-C", defaultRepo, "rev-parse", "HEAD")
+  defaultPlan.existing, defaultPlan.commonDir = true, git.repository(defaultRepo).commonDir
+  assert(worktrees.prepareCloneCheckout(defaultPlan).cwd == defaultRepo)
+  assert(not cmd("-C", defaultRepo, "branch", "--show-current"):match("%S"))
+  assert(cmd("-C", defaultRepo, "rev-parse", "HEAD") == detachedHead)
+  for _, invalid in ipairs({
+    { branch = "main" }, { worktreeName = "task" }, { directory = dir .. "/tree" }, { checkout = "worktree" },
+  }) do
+    local input = {}
+    for key, value in pairs(defaultPlan.input) do input[key] = value end
+    for key, value in pairs(invalid) do input[key] = value end
+    local invalidPlan = {}
+    for key, value in pairs(defaultPlan) do invalidPlan[key] = value end
+    invalidPlan.input = input
+    assert(not pcall(worktrees.prepareCloneCheckout, invalidPlan))
+  end
+  local externalPlan = {}
+  for key, value in pairs(defaultPlan) do externalPlan[key] = value end
+  externalPlan.input = {}
+  for key, value in pairs(defaultPlan.input) do externalPlan.input[key] = value end
+  for _, url in ipairs({ bare, "file://" .. bare }) do
+    externalPlan.input.source = { vcs = "git", url = url }
+    assert(not pcall(worktrees.prepareCloneCheckout, externalPlan))
+  end
+  cmd("-C", defaultRepo, "remote", "set-url", "origin", "git@github.com:Owner/Repo.git")
+  assert(worktrees.cloneDestination(defaultRepo, "https://github.com/owner/repo", "git") == defaultPlan.commonDir)
+  assert(not pcall(worktrees.cloneDestination, defaultRepo, "https://github.com/owner/other", "git"))
+  defaultPlan.input.source = { vcs = "git", url = "ssh://git@github.com/OWNER/REPO" }
+  assert(worktrees.prepareCloneCheckout(defaultPlan).cwd == defaultRepo)
+  assert(cmd("-C", defaultRepo, "remote", "get-url", "origin") == "git@github.com:Owner/Repo.git\n")
+  cmd("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
   local before, head = at("status", "--porcelain=v1", "-z"), at("rev-parse", "HEAD")
   local described = git.cloneSource(source, "fixture-host")
   assert(described.url == bare)

@@ -121,11 +121,11 @@ local session =
 schemas.SessionSelection = session
 local target = shape({ id = S, label = S })
 local gitSource =
-  shape({ vcs = literal("git"), url = S, sourceHostId = S, branches = optional(array(S)), branch = optional(S) })
+  shape({ vcs = literal("git"), url = S, sourceHostId = optional(S), branches = optional(array(S)), branch = optional(S) })
 local jjSource = shape({
   vcs = literal("jj"),
   url = S,
-  sourceHostId = S,
+  sourceHostId = optional(S),
   revisions = optional(array(choice)),
   revision = optional(revision),
 })
@@ -150,11 +150,13 @@ local jjInput = shape(extend(commonInput, {
 local input = union(gitInput, jjInput)
 local cloneCommon =
   extend(commonInput, { worktreeName = optional(S), checkout = optional(literal("primary", "worktree")) })
-local gitClone = shape(
-  extend(
-    cloneCommon,
-    { vcs = literal("git"), source = gitSource, branch = S, branchMode = literal("existing", "create") }
-  )
+local defaultGitClone =
+  shape(extend(cloneCommon, { vcs = literal("git"), source = gitSource, branchMode = literal("default"), checkout = literal("primary") }))
+local gitClone = union(
+  shape(extend(cloneCommon, { vcs = literal("git"), source = gitSource, branch = S, branchMode = literal("existing", "create") })),
+  { predicate = function(v)
+    return check(defaultGitClone, v) and v.branch == nil and v.worktreeName == nil and v.directory == nil
+  end }
 )
 local jjClone = shape(extend(cloneCommon, { vcs = literal("jj"), source = jjSource, revision = optional(S) }))
 local cloneInput = union(gitClone, jjClone)

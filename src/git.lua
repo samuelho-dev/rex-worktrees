@@ -35,6 +35,18 @@ function M.gitContext(directory)
   local out = optional(function() return git(directory, "rev-parse", "--absolute-git-dir") end, M.notRepository)
   return out and trim(out)
 end
+function M.githubRepository(value)
+  if type(value) ~= "string" then return nil end
+  local repo = value:match("^https://github%.com/([^/]+/[^/]+)/?$")
+    or value:match("^git@github%.com:([^/]+/[^/]+)$")
+    or value:match("^ssh://git@github%.com/([^/]+/[^/]+)$")
+  if not repo then return nil end
+  local owner, name = repo:match("^([A-Za-z0-9_.%-]+)/([A-Za-z0-9_.%-]+)$")
+  if not owner or owner == "." or owner == ".." then return nil end
+  name = name:gsub("%.git$", "")
+  if name == "" or name == "." or name == ".." then return nil end
+  return { url = value:gsub("/$", ""), name = name, identity = (owner .. "/" .. name):lower() }
+end
 function M.safeOrigin(raw, sameHost, base)
   local function unsafe() system.fail("Unsafe origin URL") end
   if

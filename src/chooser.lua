@@ -1,4 +1,5 @@
 local runtime = require("runtime")
+local git = require("git")
 local unicode = runtime.unicode
 local path = runtime.path
 local M = {}
@@ -144,7 +145,12 @@ function M.cloneInputFor(d)
     source.revisions = runtime.json.array()
     result.revision = revision
   else
-    if not (d.destination and d.destination.branch) then return end
+    if not (d.destination and d.destination.branch) then
+      if d.isCreating or d.clone.sourceHostId then return end
+      result.branchMode = "default"
+      source.branches = runtime.json.array()
+      return result
+    end
     result.branch = d.destination.branch
     result.branchMode = "create"
     for _, branch in ipairs(d.clone.branches or {}) do
@@ -303,9 +309,16 @@ local function activate(state, command, machine, context)
   local preserve = previous.machine and previous.machine.key == machine.key and previous.host
     and previous.host.hostId == host.hostId
   state.draft = preserve and copy(previous) or { machine = machine, projectChoice = previous.projectChoice, mode = previous.mode }
+  if not preserve and previous.clone and not previous.clone.sourceHostId then
+    state.draft = copy(previous)
+    state.draft.clone = copy(previous.clone)
+  end
   local d = state.draft
   d.machine, d.host = machine, host
   state.cloneRoot, state.sessions = present(found.cloneRoot) and found.cloneRoot or "", found.sessions or json.array()
+  if not preserve and d.clone and not d.clone.sourceHostId then
+    d.clone.repo = clonePath(state, d.projectChoice) or ""
+  end
   local retained = json.array()
   for _, item in ipairs(state.projects) do
     if not item.source or item.source.machineKey ~= machine.key or item.source.hostId ~= host.hostId then
@@ -328,7 +341,7 @@ local function activate(state, command, machine, context)
     if not d.session and #state.sessions == 1 then d.session = { kind = "existing", id = state.sessions[1].id } end
   end
   d.clientId = focusClient(state, found.clients)
-  local choice = previous.projectChoice
+  local choice = not (d.clone and not d.clone.sourceHostId) and previous.projectChoice or nil
   local result
   if not choice and present(found.checkout) and context then
     result = { found = initial or client.inspectProject(host, command, found.checkout.path) }
@@ -355,9 +368,9 @@ local function view(state)
   elseif tree then
     branch = present(tree.branch) and tree.branch or "Detached HEAD · " .. tree.head:sub(1, 12)
   elseif jj then
-    branch = d.destination and d.destination.revision and d.destination.label or d.clone and "Cloned default" or "Choose a starting revision"
+    branch = d.destination and d.destination.revision and d.destination.label or d.clone and "Remote default" or "Choose a starting revision"
   else
-    branch = d.destination and d.destination.branch or "Select or type branch"
+    branch = d.destination and d.destination.branch or d.clone and "Remote default" or "Select or type branch"
   end
   local rows = json.array({
     { id = "project", label = "Project", value = d.projectChoice and d.projectChoice.name or "Choose a project" },
@@ -449,13 +462,16 @@ local function openField(state, command, field)
       editor(state, field, jj and "Workspace" or "Worktree", choices, false)
       state.editor.trees, state.editor.revisions, state.editor.worktreeRoot = trees, found.revisions or json.array(), found.worktreeRoot
     elseif jj then
-      if d.clone then addChoice(choices, json.null, "Cloned default") end
+      if d.clone then addChoice(choices, json.null, "Remote default") end
       for _, choice in ipairs(found.revisions or {}) do
         addChoice(choices, choice, choice.label, choice.expression .. " · " .. choice.revision.commitId:sub(1, 12))
       end
       editor(state, field, "Start from revision", choices, true)
     else
       local occupied = {}
+      if d.clone and not d.clone.sourceHostId and not d.isCreating then
+        addChoice(choices, json.null, "Remote default")
+      end
       for _, tree in ipairs(found.worktrees or {}) do
         if tree.vcs == "git" and present(tree.branch) then occupied[tree.branch] = true end
       end
@@ -552,6 +568,9 @@ local function accept(state, command, request)
         if not request.id then
           local host, repo = d.host, d.sourcePath or d.project and d.project.path
           if d.clone then
+            if not (d.projectChoice and d.projectChoice.source) then
+              runtime.fail("Cannot inspect a revision without a source Rex checkout; use Remote default")
+            end
             local source, machine = d.projectChoice.source
             for _, item in ipairs(client.listMachines()) do if item.key == source.machineKey then machine = item end end
             if not machine then runtime.fail("Clone source machine is no longer registered") end
@@ -566,6 +585,8 @@ local function accept(state, command, request)
         state.draft = M.selectRevision(d, choice)
         if d.clone then state.draft.clone.revision = choice.revision end
       end
+    elseif request.id and not present(value) then
+      d.destination = nil
     else
       if value == "" or value:sub(1, 1) == "-" or value:find("[%z\1-\31\127]") then
         runtime.fail("Branch name must be a valid Git branch")
@@ -596,6 +617,35 @@ local function namedWorktree(d, text)
     r.project.path = selected.worktree.path
   end
   return r
+end
+
+local function typedDraft(state, command, text)
+  local value = trim(text)
+  local repository = git.githubRepository(value)
+  if not repository then
+    if value:match("^[%a][%w+.-]*:") or value:match("^[^/%s]+@[^/%s]+:")
+      or value:lower():match("^github%.com/") or value:lower():match("^www%.github%.com/") then
+      runtime.fail("Enter a valid GitHub repository clone URL")
+    end
+    return namedWorktree(state.draft, text)
+  end
+  local d = state.draft
+  if not (d.machine and d.host and d.session) then
+    runtime.fail("Select a machine and session before cloning a repository")
+  end
+  local found = client.connectAndDiscover(d.machine, command)
+  if found.host.hostId ~= d.host.hostId then
+    runtime.fail("Rex host identity changed; select the machine again")
+  end
+  state.cloneRoot = present(found.cloneRoot) and found.cloneRoot or ""
+  local repo = clonePath(state, repository)
+  if not repo or not path.isAbsolute(repo) then
+    runtime.fail("No clone root is configured on the selected machine")
+  end
+  local vcs = d.clone and d.clone.vcs or d.project and d.project.vcs or "git"
+  local result = M.changeProjectChoice(d, { name = repository.name })
+  result.clone = { vcs = vcs, url = repository.url, repo = repo }
+  return result
 end
 
 local function submit(state, command, confirmed)
@@ -678,7 +728,7 @@ function M.request(request, command)
         state.editor, state.confirmation = nil, nil
       elseif request.op == "submit" then
         if state.editor or state.confirmation then runtime.fail("Finish or cancel the current prompt first") end
-        if request.text ~= nil then state.draft = namedWorktree(state.draft, request.text) end
+        if request.text ~= nil then state.draft = typedDraft(state, command, request.text) end
         submit(state, command, false)
       elseif request.op == "confirm" then
         if not state.confirmation then runtime.fail("No safety confirmation is pending") end

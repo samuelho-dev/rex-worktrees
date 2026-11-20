@@ -148,4 +148,53 @@ return function()
   assert(not accepted.editor and accepted.rows[7].value == "Always new tab")
   local cancelled = ui.request({ op = "cancel", state = editing.state }, {})
   assert(not cancelled.editor and cancelled.rows[7].value == "Reuse matching tab, otherwise new tab")
+
+  local client = require("client")
+  local discover, review, reviewClone = client.connectAndDiscover, client.review, client.reviewClone
+  local ok, err = xpcall(function()
+    local reviewed
+    client.connectAndDiscover = function(machine)
+      assert(machine.key == "local")
+      return { host = host, cloneRoot = "/remote/projects" }
+    end
+    client.reviewClone = function(selectedHost, _, request)
+      assert(selectedHost.hostId == "host")
+      reviewed = request
+      return { hostId = "host", repo = request.repo, input = request, warning = "Review" }
+    end
+    local function chooserState(project)
+      return s.json.encode({
+        draft = { mode = "auto", host = host, machine = host, project = project,
+          projectChoice = project and { name = project.name } or nil,
+          session = { kind = "existing", id = "session" } },
+        origin = s.json.object(), projects = s.json.array(), sessions = s.json.array(), cloneRoot = "/stale",
+      })
+    end
+    for _, value in ipairs({ "https://github.com/owner", "git@github.com:owner/", "https://example.com/a/b",
+      "github.com/owner/repo", "ssh:/github.com/owner/repo" }) do
+      local rejected = ui.request({ op = "submit", state = chooserState(repo), text = value }, {})
+      assert(rejected.error and rejected.error:find("repository clone URL", 1, true))
+    end
+    local response = ui.request({ op = "submit", state = chooserState(), text = "https://github.com/owner/example.git" }, {})
+    assert(response.confirmation and reviewed.repo == "/remote/projects/example" and reviewed.session.id == "session")
+    assert(reviewed.checkout == "primary" and reviewed.branchMode == "default" and reviewed.branch == nil)
+    assert(reviewed.source.url == "https://github.com/owner/example.git" and reviewed.source.sourceHostId == nil)
+    assert(response.rows[5].value == "Remote default")
+    response = ui.request({ op = "submit", state = chooserState(jjrepo), text = "git@github.com:owner/example.git" }, {})
+    assert(response.confirmation and reviewed.vcs == "jj" and reviewed.revision == nil and reviewed.source.revision == nil)
+    local cancelledConfirmation = ui.request({ op = "cancel", state = response.state }, {})
+    local revisionEditor = ui.request({ op = "edit", state = cancelledConfirmation.state, field = "branch" }, {})
+    local invalidRevision = ui.request({ op = "accept", state = revisionEditor.state, text = "trunk()" }, {})
+    assert(invalidRevision.error and invalidRevision.error:find("without a source Rex checkout", 1, true))
+    client.review = function(selectedHost, _, input)
+      return { hostId = selectedHost.hostId, path = input.directory, warning = "Review" }
+    end
+    local named = ui.request({ op = "submit", state = chooserState(repo), text = "topic@work" }, {})
+    assert(named.confirmation and named.rows[5].value == "topic@work")
+    client.connectAndDiscover = function() return { host = { hostId = "changed" }, cloneRoot = "/other" } end
+    local changed = ui.request({ op = "submit", state = chooserState(), text = "https://github.com/owner/example" }, {})
+    assert(changed.error and changed.error:find("identity changed", 1, true))
+  end, debug.traceback)
+  client.connectAndDiscover, client.review, client.reviewClone = discover, review, reviewClone
+  assert(ok, err)
 end
