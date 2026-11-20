@@ -242,9 +242,14 @@ function M.setup(opts)
             items[#items + 1] = { id = "submit", title = response.submitLabel }
           end
           local title = response.error or response.notice or "Open Worktree"
-          local choice, why, detail = rex.ui.pick{ title = title, items = items }
+          local choice, why, detail = rex.ui.pick{
+            title = title, items = items, allow_other = true,
+            placeholder = "Type a new worktree name, or select a setting", confirm = "Create & open",
+          }
           if choice == nil then no_answer(why, detail); return end
-          if choice == "submit" and not response.submitDisabled then
+          if type(choice) == "table" and type(choice.text) == "string" then
+            request.op, request.text = "submit", choice.text
+          elseif choice == "submit" and not response.submitDisabled then
             request.op = "submit"
           elseif rows[choice] then
             local row = rows[choice]

@@ -576,6 +576,28 @@ local function accept(state, command, request)
   end
 end
 
+local function namedWorktree(d, text)
+  if not (d.host and (d.project or d.clone) and d.session) then
+    runtime.fail("Select a project, machine, and session before creating a worktree")
+  end
+  local name = trim(text)
+  if name == "" then runtime.fail("A new worktree name is required") end
+  local r, selected = copy(d), d.destination or {}
+  local jj = (d.clone and d.clone.vcs or d.project.vcs) == "jj"
+  local revision = selected.revision or selected.worktree and selected.worktree.head
+    or d.clone and d.clone.revision and d.clone.revision.commitId
+  r.isCreating, r.worktreeName = true, jj and name or nil
+  r.directory = d.directory and path.join(path.dirname(d.directory), name) or nil
+  r.destination = jj and { revision = revision, label = selected.revision and selected.label or revision and revision:sub(1, 12) }
+    or { branch = name, label = name }
+  if not jj and selected.worktree then
+    r.worktreeRoot = d.worktreeRoot or d.project.path .. ".worktrees"
+    r.project = copy(d.project)
+    r.project.path = selected.worktree.path
+  end
+  return r
+end
+
 local function submit(state, command, confirmed)
   if state.blocked then runtime.fail("Inspect the destination and session before opening again") end
   local d = state.draft
@@ -656,6 +678,7 @@ function M.request(request, command)
         state.editor, state.confirmation = nil, nil
       elseif request.op == "submit" then
         if state.editor or state.confirmation then runtime.fail("Finish or cancel the current prompt first") end
+        if request.text ~= nil then state.draft = namedWorktree(state.draft, request.text) end
         submit(state, command, false)
       elseif request.op == "confirm" then
         if not state.confirmation then runtime.fail("No safety confirmation is pending") end

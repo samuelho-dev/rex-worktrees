@@ -8,7 +8,7 @@ return function()
   local function summary(state, editor)
     return { state = state, rows = rows, submitLabel = "Open", submitDisabled = false, editor = editor }
   end
-  local pick_count = 0
+  local pick_count, quick = 0, false
   rex = {
     session_id = "local-session", block_id = "local-block",
     json = {
@@ -38,7 +38,8 @@ return function()
         assert(request.state == "editor-2")
         pending = summary("draft-2")
       elseif request.op == "submit" then
-        assert(request.state == "draft-2")
+        assert(request.state == (quick and "draft-1" or "draft-2"))
+        if quick then assert(request.text == "new-feature") end
         pending = { done = true, result = { opened = true } }
       else error("unexpected operation " .. tostring(request.op)) end
       return { ok = true, stdout = "response" }
@@ -46,6 +47,7 @@ return function()
     ui = {
       pick = function(prompt)
         pick_count = pick_count + 1
+        if quick then return { text = "new-feature" } end
         if pick_count == 1 then
           assert(#prompt.items == 8 and prompt.items[5].detail == "Read only")
           return "field:branch"
@@ -65,5 +67,9 @@ return function()
   local result = actions.worktrees_open({ session_id = "remote-session", block_id = "remote-block",
     client_id = "client", server = "remote" })
   assert(result.opened and #calls == 5 and calls[5].op == "submit")
+  quick = true
+  result = actions.worktrees_open({ session_id = "remote-session", block_id = "remote-block",
+    client_id = "client", server = "remote" })
+  assert(result.opened and calls[#calls].op == "submit" and calls[#calls].text == "new-feature")
   rex = old_rex
 end

@@ -24,7 +24,10 @@ case " $* " in
     if [ "$REX_TEST_NO_CWD" = 1 ]; then echo '{"last_exit":null,"foreground":{}}'; exit 0; fi
     printf '{"last_exit":%s,"foreground":{"cwd":"%s"}}\n' "${REX_TEST_EXIT:-null}" "${REX_TEST_CWD:-/projects/current}" ;;
   *' pwd '*) printf '{"pwd":"%s"}\n' "${REX_TEST_PWD:-file://foreign.invalid/projects/current}" ;;
-  *' client.list '*) echo '{"clients":[]}' ;;
+  *' client.list '*)
+    if [ "$REX_TEST_MULTIPLE_APPS" = 1 ]; then
+      echo '{"clients":[{"client_id":"one","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"two","info":{"kind":"app"},"connection_state":"connected"}]}'
+    else echo '{"clients":[]}'; fi ;;
   *' session.view '*) echo '{"active_window_id":"window","windows":[{"window_id":"window","focused_block_id":"block","zoomed_block_id":null,"layers":[{"layout":{"rect":[0,0,1,1],"block_id":"block"},"blocks":[{"block_id":"block","flavor":"com.superlogical.terminal.shell"}]}]}]}' ;;
   *' session.new_split '*) echo '{"block_ids":["new-pane"]}' ;;
   *' session.create '*) echo '{"session_id":"created","initial_windows":[{"window_id":"new-window","block_ids":["new-block"]}]}' ;;
@@ -135,6 +138,47 @@ esac
   for _, item in ipairs(projects.editor.items) do if item.title == "other" then hasOther = true end end
   assert(hasOther and projects.rows[5].value == "main" and projects.rows[6].value == repo)
   assert(posix.setenv("REX_WORKTREES_CONFIG", previousConfig, true))
+  local sourceCheckout, jjRepo = root .. "/source-context", root .. "/quick-jj"
+  git("worktree", "add", "-b", "source-context", sourceCheckout)
+  s.fs.writeFileString(sourceCheckout .. "/context-only", "selected checkout\n")
+  s.run("git", { "-C", sourceCheckout, "add", "context-only" })
+  s.run("git", { "-C", sourceCheckout, "commit", "-m", "source context" })
+  s.run("jj", { "git", "init", "--no-colocate", jjRepo })
+  s.run("jj", { "-R", jjRepo, "describe", "-m", "source context" })
+  local quickRoot = root .. "/quick-checkouts"
+  assert(posix.setenv("REX_WORKTREES_CONFIG", s.json.encode({
+    directory = root, config = { projects = {
+      { path = repo, worktreeRoot = quickRoot }, { path = jjRepo, worktreeRoot = quickRoot },
+    } },
+  }), true))
+  assert(posix.setenv("REX_TEST_MULTIPLE_APPS", "1", true))
+  for _, source in ipairs({ sourceCheckout, jjRepo }) do
+    local ready = chooser.request({ op = "start", context = source }, {})
+    assert(not ready.error)
+    local mode = chooser.request({ op = "edit", field = "mode", state = ready.state }, {})
+    ready = chooser.request({ op = "accept", state = mode.state, id = mode.editor.items[2].id }, {})
+    local original = s.json.decode(ready.state).draft.destination.worktree
+    local name = original.vcs == "git" and "quick-git" or "quick-jj"
+    local named = chooser.request({ op = "submit", state = ready.state, text = name }, {})
+    assert(not named.error and named.confirmation and not named.done)
+    assert(named.rows[3].value == "Same label" and named.rows[6].value == quickRoot .. "/" .. name)
+    assert(named.rows[7].value == "Always new tab")
+    local input = chooser.inputFor(s.json.decode(named.state).draft)
+    local plan = worktrees.planLaunch(input, "fixture-host")
+    assert((plan.base.head or plan.base.commitId) == original.head and input.repo == source)
+    for _, invalid in ipairs({ "", "../escape", "-bad", "bad\nname" }) do
+      local rejected = chooser.request({ op = "submit", state = ready.state, text = invalid }, {})
+      assert(rejected.error and not rejected.done and not rejected.confirmation)
+      assert(rejected.rows[6].value == source)
+    end
+  end
+  assert(not s.fs.exists(quickRoot))
+  assert(posix.setenv("REX_WORKTREES_CONFIG", previousConfig, true))
+  local default = chooser.request({ op = "start", context = sourceCheckout }, {})
+  local namedDefault = chooser.request({ op = "submit", state = default.state, text = "default-root" }, {})
+  assert(not namedDefault.error and namedDefault.confirmation)
+  assert(namedDefault.rows[6].value == repo .. ".worktrees/default-root")
+  assert(posix.setenv("REX_TEST_MULTIPLE_APPS", nil))
   local redirected = {
     vcs = "git",
     repo = repo,

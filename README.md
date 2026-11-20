@@ -24,7 +24,7 @@ rex do worktrees_open
 
 The native summary picker detects the source terminal's project, current worktree, branch or revision, and full directory path. Select a field to edit it, then return to the summary. Escape returns from an editor or confirmation to the summary; Escape at the summary cancels without checkout changes. Git worktrees are separate checkout directories sharing one repository—not separate repositories or branch names.
 
-The summary's text box filters its rows; Enter activates the highlighted row. It does not turn typed text into a new worktree. Submit with the **Open worktree / Create worktree & open** row. The current repository loads first; the full configured project scan runs when you open **Project**.
+Type a new worktree name in the summary and press Enter on **Create & open** to create and open it immediately, using the selected project, machine, session, mode, and worktree directory settings. Git uses the name for its branch and starts from the selected checkout's HEAD; JJ uses it for the workspace and keeps the selected starting revision. Existing checkouts are never switched or reset. You can still filter and select a setting or use **Open worktree / Create worktree & open**. The current repository loads first; the full configured project scan runs when you open **Project**.
 
 1. **Project:** select a discovered project or type an absolute repository path.
 2. **Machine:** choose a named Rex machine; **Current terminal** identifies the source server, not the machine hosting the native picker.
