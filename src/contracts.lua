@@ -299,6 +299,44 @@ local function variants(entries)
 end
 schemas.Request = variants(req)
 schemas.Response = variants(res)
+local chooserField = literal("project", "machine", "session", "destination", "branch", "checkoutName", "mode")
+define("ChooserRequest", {
+  op = literal("start", "edit", "accept", "cancel", "submit", "confirm"),
+  state = optional(S),
+  origin = optional(shape({ sessionId = optional(S), blockId = optional(S), clientId = optional(S), server = optional(S) })),
+  context = optional(S),
+  machine = optional(S),
+  field = optional(chooserField),
+  id = optional(S),
+  text = optional(S),
+})
+define("ChooserState", {
+  draft = shape({ mode = literal("auto", "new-tab", "split") }),
+  origin = shape({ sessionId = optional(S), blockId = optional(S), clientId = optional(S), server = optional(S) }),
+  originMachine = optional(S),
+  projects = array(A),
+  sessions = array(A),
+  cloneRoot = S,
+  editor = optional(shape({
+    field = chooserField, kind = literal("pick", "input"), title = S,
+    choices = array(shape({ id = S, value = A, title = S, detail = optional(S) })), allowOther = B,
+  })),
+  confirmation = optional(shape({ warning = S })),
+  blocked = optional(B), done = optional(B), error = optional(S), notice = optional(S),
+})
+define("ChooserResponse", {
+  state = optional(S),
+  rows = array(shape({ id = chooserField, label = S, value = S, detail = optional(S),
+    disabled = optional(B), isReadOnly = optional(B) })),
+  submitLabel = S, submitDisabled = B, error = optional(S), notice = optional(S),
+  editor = optional(shape({
+    kind = literal("pick", "input"), title = S,
+    items = array(shape({ id = S, title = S, subtitle = optional(S), detail = optional(S) })),
+    allowOther = B, value = optional(S),
+  })),
+  confirmation = optional(shape({ title = S, detail = S })),
+  done = optional(B), result = optional(union(launchResult, cloneResult)),
+})
 define("RexIdentity", { host_id = S, endpoint = S, principal = shape({ transport = S }) })
 define("RexSessions", { sessions = array(shape({ session_id = S, label = S })) })
 define("RexCreated", { window_id = S, block_ids = array(S) })
@@ -370,5 +408,4 @@ end
 return {
   validate = validate,
   decode = function(name, text) return validate(name, json.decode(text)) end,
-  popupSize = { columns = 80, rows = 16 },
 }

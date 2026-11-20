@@ -76,10 +76,8 @@ local function liveBlock(sessionId, blockId, destination)
   then
     return false
   end
-  local reported = call("pwd", "RexDirectory")
-  if not reported or not reported.pwd or reported.pwd == system.json.null then return false end
-  local directory = rex.localDirectoryUri(reported.pwd)
-  if not directory then return false end
+  local directory = process.foreground.cwd
+  if type(directory) ~= "string" or not path.isAbsolute(directory) or directory:find("\0", 1, true) then return false end
   local ok, result = system.try(function() return fs.realPath(directory) end)
   if not ok then
     if system.missing(result) then return false end

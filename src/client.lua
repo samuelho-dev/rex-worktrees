@@ -119,7 +119,7 @@ function M.connectAndDiscover(machine, command, context)
   return rex.withOperation(function()
     local host = M.connectMachine(machine)
     local body = { kind = "discover" }
-    if host["local"] and context then body.context = context end
+    if context then body.context = context end
     local result = connectedRequest(host, command, body)
     result.host = host
     return result

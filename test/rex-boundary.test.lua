@@ -20,12 +20,11 @@ case " $* " in
   *' process '*)
     if [ "$REX_TEST_PROCESS_ERROR" = missing ]; then echo 'Error: block target "block" not found' >&2; exit 3; fi
     if [ "$REX_TEST_PROCESS_ERROR" = denied ]; then echo 'permission denied' >&2; exit 3; fi
+    if [ "$REX_TEST_NO_CWD" = 1 ]; then echo '{"last_exit":null,"foreground":{}}'; exit 0; fi
     printf '{"last_exit":%s,"foreground":{"cwd":"%s"}}\n' "${REX_TEST_EXIT:-null}" "${REX_TEST_CWD:-/projects/current}" ;;
   *' pwd '*) printf '{"pwd":"%s"}\n' "${REX_TEST_PWD:-file://foreign.invalid/projects/current}" ;;
   *' client.list '*) echo '{"clients":[]}' ;;
-  *' session.view '*) printf '{"active_window_id":"window","windows":[{"window_id":"window","focused_block_id":"block","zoomed_block_id":%s,"layers":[{"layout":{"rect":[0,0,1,%s],"block_id":"block"},"blocks":[{"block_id":"block","flavor":"com.superlogical.terminal.shell"}]}]}]}\n' "${REX_TEST_ZOOM:-null}" "${REX_TEST_FRACTION:-1}" ;;
-  *' size '*) printf '{"columns":160,"rows":%s}\n' "${REX_TEST_ROWS:-80}" ;;
-  *' session.new_layer '*) echo '{"layer_id":"popup","block_ids":["popup-block"],"revision":1}' ;;
+  *' session.view '*) echo '{"active_window_id":"window","windows":[{"window_id":"window","focused_block_id":"block","zoomed_block_id":null,"layers":[{"layout":{"rect":[0,0,1,1],"block_id":"block"},"blocks":[{"block_id":"block","flavor":"com.superlogical.terminal.shell"}]}]}]}' ;;
   *' session.new_split '*) echo '{"block_ids":["new-pane"]}' ;;
   *' session.create '*) echo '{"session_id":"created","initial_windows":[{"window_id":"new-window","block_ids":["new-block"]}]}' ;;
   *) echo "unexpected rex call: $*" >&2; exit 1 ;;
@@ -70,25 +69,12 @@ esac
   assert(split.sessionId == "session" and split.windowId == "anchor-window" and split.blockId == "new-pane")
   local created = rex.openTerminal({ kind = "new", name = "Same label" }, "Task", "/repo", { "/bin/sh" })
   assert(created.sessionId == "created" and created.windowId == "new-window" and created.blockId == "new-block")
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_FRACTION", "0.5", true))
-  assert(posix.setenv("REX_TEST_ROWS", "40", true))
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_ZOOM", '"block"', true))
-  assert(posix.setenv("REX_TEST_ROWS", "80", true))
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_FRACTION", nil))
-  assert(posix.setenv("REX_TEST_ROWS", nil))
-  assert(posix.setenv("REX_TEST_ZOOM", nil))
   local calls = s.fs.readFileString(log)
   local found = false
   for line in calls:gmatch("[^\n]+") do
     local ok, value = pcall(s.json.decode, line)
-    if ok and type(value) == "table" and value.bounds then
-      assert(math.abs(value.bounds[3] - 82 / 160) < 1e-9 and math.abs(value.bounds[4] - 19 / 80) < 1e-9)
-      assert(value.layout.block.options.size.columns == 80 and value.layout.block.options.size.rows == 16)
+    if ok and type(value) == "table" and value.initial_windows then
       found = true
-    elseif ok and type(value) == "table" and value.initial_windows then
       assert(value.label == "Same label" and #value.initial_windows == 1)
       assert(value.initial_windows[1].layout.block.options.cwd == "/repo")
     end
@@ -139,11 +125,18 @@ esac
     blockId = "block",
   })
   assert(posix.setenv("REX_TEST_CWD", repo, true))
-  assert(posix.setenv("REX_TEST_PWD", repo, true))
+  assert(posix.setenv("REX_TEST_PWD", "file://localhost/stale", true))
   local existingInput =
     { vcs = "git", repo = repo, path = repo, name = "Task", session = { kind = "existing", id = "session" } }
   local reuse = worktrees.planLaunch(existingInput, "fixture-host")
   assert(reuse.action == "focus" and reuse.target.blockId == "block" and reuse.target.windowId == "window")
+  assert(posix.setenv("REX_TEST_PWD", repo, true))
+  assert(posix.setenv("REX_TEST_CWD", root, true))
+  assert(worktrees.planLaunch(existingInput, "fixture-host").action == "new-tab")
+  assert(posix.setenv("REX_TEST_CWD", repo, true))
+  assert(posix.setenv("REX_TEST_NO_CWD", "1", true))
+  assert(worktrees.planLaunch(existingInput, "fixture-host").action == "new-tab")
+  assert(posix.setenv("REX_TEST_NO_CWD", nil))
   local splitInput = {
     vcs = "git",
     repo = repo,

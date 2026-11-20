@@ -6,10 +6,7 @@ local path = system.path
 local help = [=[rex-worktrees — Git worktrees and JJ workspaces on existing Rex machines
   setup [--bin /absolute/path/rex-worktrees] [--config /absolute/path/init.lua]
                                          install Lua module; copy binary to ~/.local/bin unless --bin is set
-  popup [--host HOST] [--context PATH | --no-context] [--origin-session ID [--origin-block ID]] [--origin-client ID]
-                                         interactive terminal chooser
-  launch-popup [--session ID] [--origin-block ID | --no-context] [--origin-client ID] [--host HOST]
-                                         open a floating chooser in the source window
+  chooser                                read a JSON chooser request on stdin, write a JSON response
   open --repo PATH --session ID --name NAME (--branch NAME | --worktree PATH) [--worktree-name NAME]
                                          Git: branch checkout or existing worktree
   open --repo PATH --session ID --name NAME (--worktree PATH | --worktree-name NAME --revision EXPR)
@@ -19,7 +16,7 @@ local help = [=[rex-worktrees — Git worktrees and JJ workspaces on existing Re
   help
 
 --host selects an existing Rex host label or registry ID. Install setup separately on each destination.]=]
-local booleans = { ["--additional"] = true, ["--split"] = true, ["--no-context"] = true }
+local booleans = { ["--additional"] = true, ["--split"] = true }
 local strings = {
   ["--bin"] = true,
   ["--config"] = true,
@@ -32,10 +29,6 @@ local strings = {
   ["--worktree"] = true,
   ["--worktree-name"] = true,
   ["--client"] = true,
-  ["--context"] = true,
-  ["--origin-session"] = true,
-  ["--origin-block"] = true,
-  ["--origin-client"] = true,
 }
 local function parseFlags(args)
   local flags, index = {}, 1
@@ -48,12 +41,10 @@ local function parseFlags(args)
       index = index + 1
       local value = args[index]
       if not value or value == "" or value:sub(1, 2) == "--" then system.fail("Missing value for " .. flag) end
-      if flag == "--session" or flag == "--origin-session" then
+      if flag == "--session" then
         contracts.validate("SessionId", value)
-      elseif flag == "--client" or flag == "--origin-client" then
+      elseif flag == "--client" then
         contracts.validate("ClientId", value)
-      elseif flag == "--origin-block" then
-        contracts.validate("BlockId", value)
       end
       flags[flag] = value
     else
@@ -67,11 +58,6 @@ local function only(flags, allowed, message)
   for flag in pairs(flags) do
     if not allowed[flag] then system.fail(message) end
   end
-end
-local function envId(name, schema)
-  local value = system.getenv(name)
-  if value ~= nil then contracts.validate(schema, value) end
-  return value
 end
 local function machineFor(selected)
   for _, machine in ipairs(client.listMachines()) do
@@ -118,90 +104,16 @@ local function main()
     return
   end
   local executable = system.command()
-  if verb == "popup" then
-    local flags = parseFlags(argv)
-    only(
-      flags,
-      {
-        ["--host"] = true,
-        ["--context"] = true,
-        ["--origin-session"] = true,
-        ["--origin-block"] = true,
-        ["--origin-client"] = true,
-        ["--no-context"] = true,
-      },
-      "Invalid popup flags"
-    )
-    if flags["--context"] and flags["--no-context"] then
-      system.fail("--context and --no-context are mutually exclusive")
-    end
-    if flags["--origin-block"] and not flags["--origin-session"] then
-      system.fail("--origin-block requires --origin-session")
-    end
-    local envSession = envId("REX_SESSION", "SessionId")
-    local sessionId = flags["--origin-session"] or envSession
-    local blockId = flags["--origin-block"]
-      or (not flags["--no-context"] and sessionId == envSession and envId("REX_BLOCK", "BlockId") or nil)
-    local origin = {
-      sessionId = sessionId,
-      blockId = blockId,
-      clientId = flags["--origin-client"] or envId("REX_CLIENT", "ClientId"),
-    }
-    local function context()
-      if flags["--context"] then return path.resolve(flags["--context"]) end
-      if flags["--no-context"] then return nil end
-      if #argv > 0 and sessionId and blockId then return rex.originDirectory(sessionId, blockId) end
-      return system.cwd()
-    end
-    require("ui").popup(executable, context, origin, flags["--host"])
-    return
-  end
-  if verb == "launch-popup" then
-    local flags = parseFlags(argv)
-    only(
-      flags,
-      { ["--session"] = true, ["--host"] = true, ["--origin-block"] = true, ["--origin-client"] = true, ["--no-context"] = true },
-      "Invalid launch-popup flags"
-    )
-    if flags["--origin-block"] and flags["--no-context"] then
-      system.fail("--origin-block and --no-context are mutually exclusive")
-    end
-    local envSession = envId("REX_SESSION", "SessionId")
-    local sessionId = flags["--session"] or envSession
-    if not sessionId then system.fail("Specify --session ID or run inside a Rex terminal") end
-    local blockId = flags["--origin-block"] or (sessionId == envSession and envId("REX_BLOCK", "BlockId") or nil)
-    local clientId = flags["--origin-client"] or (sessionId == envSession and envId("REX_CLIENT", "ClientId") or nil)
-    if flags["--host"] and not machineFor(flags["--host"]) then
-      system.fail("Rex host " .. flags["--host"] .. " is not registered")
-    end
-    local command = { table.unpack(executable) }
-    command[#command + 1] = "popup"
-    command[#command + 1] = "--origin-session"
-    command[#command + 1] = sessionId
-    if flags["--origin-block"] and blockId then
-      local context = rex.originDirectory(sessionId, blockId)
-      command[#command + 1] = "--origin-block"
-      command[#command + 1] = blockId
-      command[#command + 1] = context and "--context" or "--no-context"
-      if context then command[#command + 1] = context end
-    elseif flags["--no-context"] then
-      command[#command + 1] = "--no-context"
-    else
-      command[#command + 1] = "--context"
-      command[#command + 1] = system.cwd()
-    end
-    if flags["--host"] then
-      command[#command + 1] = "--host"
-      command[#command + 1] = flags["--host"]
-    end
-    print(system.json.encode(rex.openPopup(command, sessionId, { blockId = blockId, clientId = clientId })))
+  if verb == "chooser" then
+    if #argv > 0 then system.fail("chooser reads JSON from stdin") end
+    local raw = io.read("*a")
+    if not raw then system.fail("Failed reading stdin") end
+    local request = contracts.decode("ChooserRequest", raw)
+    print(system.json.encode(require("chooser").request(request, executable)))
     return
   end
   if verb == "open" then
     local flags = parseFlags(argv)
-    for _, key in ipairs({ "--context", "--origin-session", "--origin-block", "--origin-client", "--no-context" }) do
-      if flags[key] then system.fail("Context flags are only supported by popup") end
-    end
     if flags["--bin"] then system.fail("--bin is only supported by setup") end
     if not flags["--repo"] or not flags["--session"] or not flags["--name"] then
       system.fail("open requires --repo PATH --session ID --name NAME")
