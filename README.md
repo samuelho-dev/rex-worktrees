@@ -2,6 +2,8 @@
 
 A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for opening and creating **Git worktrees** and **Jujutsu (JJ) workspaces**. Pick a project, machine, session, and worktree; it opens a shell there. No agent or model required.
 
+![Native Open Worktree picker](https://raw.githubusercontent.com/samuelho-dev/rex-worktrees/main/.github/picker.png)
+
 ## Install
 
 Requires Rex API 17 or newer, its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. The native picker requires the standalone executable backend on each execution machine. Builds support Apple Silicon macOS 15+ and Linux x64; no separately installed Lua runtime is needed.
