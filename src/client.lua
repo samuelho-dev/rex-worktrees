@@ -4,7 +4,7 @@ local rex = require("rex")
 local json = system.json
 local M = {}
 local function machinesIn(registry)
-  local label = registry.home.this_machine and registry.home.label ~= "" and registry.home.label or "This machine"
+  local label = registry.home.this_machine and registry.home.label ~= "" and registry.home.label or system.hostname()
   local result = json.array({
     {
       key = "local",
@@ -19,7 +19,28 @@ local function machinesIn(registry)
   end
   return result
 end
-function M.listMachines() return machinesIn(rex.machinesRegistry()) end
+function M.listMachines(originKey)
+  local machines = machinesIn(rex.machinesRegistry())
+  if originKey and originKey ~= "local" then
+    local origin
+    for _, machine in ipairs(machines) do if machine.key == originKey then origin = machine end end
+    if origin then
+      local source = M.connectMachine(origin)
+      local aliases = contracts.decode("RexHosts", rex.remoteRex(source.selector, { "api", "call", "hosts.list" }))
+      local localHost = rex.localHost()
+      if not system.isNull(aliases.hosts) then
+        for _, alias in ipairs(aliases.hosts) do
+          local matches = alias.host_id == localHost.id
+          for _, endpoint in ipairs(alias.endpoints) do
+            if endpoint == localHost.endpoint then matches = true end
+          end
+          if matches then machines[1].label = alias.label; break end
+        end
+      end
+    end
+  end
+  return machines
+end
 function M.connectMachine(machine)
   local registry = rex.machinesRegistry()
   local current
@@ -52,7 +73,7 @@ function M.connectMachine(machine)
   if not found then
     system.fail("Rex machine " .. current.label .. " resolved to an unexpected server; refusing to route remotely")
   end
-  local actions = contracts.decode("RexActions", rex.remoteRex(current.selector, { "actions", "--json" }))
+  local actions = rex.remoteActions(current.selector)
   local helper
   for _, action in ipairs(actions.actions) do
     if action.name == "worktrees_request" then
@@ -119,7 +140,7 @@ function M.connectAndDiscover(machine, command, context)
   return rex.withOperation(function()
     local host = M.connectMachine(machine)
     local body = { kind = "discover" }
-    if host["local"] and context then body.context = context end
+    if context then body.context = context end
     local result = connectedRequest(host, command, body)
     result.host = host
     return result

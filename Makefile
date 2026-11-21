@@ -1,6 +1,6 @@
 .PHONY: build check test clean
 
-LUA_PATH := $(CURDIR)/src/?.lua;$(CURDIR)/.build/modules/?.lua;$(CURDIR)/.build/modules/?/init.lua;$(CURDIR)/.build/src/terminal/src/?.lua;$(CURDIR)/.build/src/terminal/src/?/init.lua;;
+LUA_PATH := $(CURDIR)/src/?.lua;$(CURDIR)/.build/modules/?.lua;$(CURDIR)/.build/modules/?/init.lua;;
 LUA_CPATH := $(CURDIR)/.build/lib/?.so;;
 export LUA_PATH LUA_CPATH
 

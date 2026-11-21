@@ -151,6 +151,23 @@ return function()
       branchMode = "existing",
     },
   }
+  local external = copy(clone)
+  external.input.source = { vcs = "git", url = "https://github.com/owner/repo" }
+  external.input.branch, external.input.branchMode, external.input.checkout = nil, "default", "primary"
+  local cloneRequest = { version = 5, hostId = "target", kind = "clone-plan", input = external.input }
+  assert(contracts.validate("Request", cloneRequest).input.source.sourceHostId == nil)
+  assert(contracts.validate("CloneTaskRequest", { plan = external }).plan.input.branch == nil)
+  for _, mutate in ipairs({
+    function(p) p.branch = "main" end,
+    function(p) p.checkout = "worktree" end,
+    function(p) p.checkout = nil end,
+    function(p) p.directory = "/tree" end,
+    function(p) p.worktreeName = "task" end,
+  }) do
+    local invalid = copy(cloneRequest)
+    mutate(invalid.input)
+    assert(not pcall(contracts.validate, "Request", invalid))
+  end
   changed = copy(clone)
   changed.warning = "informational"
   assert(worktrees.sameClonePlan(clone, changed))

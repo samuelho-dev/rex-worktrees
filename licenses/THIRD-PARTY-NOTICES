@@ -3,9 +3,6 @@ This executable bundles the following MIT-licensed software:
 Lua 5.4.8 — https://www.lua.org/
 Copyright (C) 1994–2025 Lua.org, PUC-Rio.
 
-terminal.lua 0.1.0 — https://github.com/lunarmodules/terminal.lua
-Copyright (c) 2024-2026 Thijs Schreijer
-
 LuaSystem 0.7.1 — https://github.com/lunarmodules/luasystem
 Copyright (c) 2016-2024, Oscar Lim
 Copyright (c) 2024-2026, the luasystem project authors.

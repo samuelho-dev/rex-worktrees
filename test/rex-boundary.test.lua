@@ -11,21 +11,24 @@ for arg in "$@"; do last="$arg"; done
 printf '%s\n' "$last" >> "$REX_TEST_LOG"
 case " $* " in
   *' -S Remote '*' whoami '*) printf '{"host_id":"%s","endpoint":"%s","principal":{"transport":"unix"}}\n' "${REX_TEST_REMOTE_HOST:-remote-host}" "${REX_TEST_REMOTE_ENDPOINT:-unix:///remote-one}" ;;
+  *' hosts.list '*) echo '{"hosts":[{"label":"Mac","endpoints":["https://fixture.test"]}]}' ;;
   *' hosts list '*) printf '{"home":{"label":"Local","endpoint":"unix:///fixture.sock","this_machine":true},"hosts":[{"host":{"id":"remote-id","label":"Remote","endpoints":["%s"]}}]}\n' "${REX_TEST_REGISTERED_ENDPOINT:-unix:///remote-one}" ;;
   *' actions '*) echo '{"actions":[{"name":"worktrees_request","args":{"properties":{"request":{"type":"string"}}}}]}' ;;
-  *' whoami '*) echo '{"host_id":"fixture-host","endpoint":"unix:///fixture.sock","principal":{"transport":"unix"}}' ;;
+  *' whoami '*) echo '{"host_id":"fixture-host","endpoint":"unix:///fixture.sock","principal":{"transport":"unix"},"tailscale":{"https":{"url":"https://fixture.test"}}}' ;;
   *' session.list_blocks '*) printf '{"blocks":[{"block_id":"block","host_id":"%s","placement":"%s","window_id":"%s"}]}\n' "${REX_TEST_BLOCK_HOST:-fixture-host}" "${REX_TEST_PLACEMENT:-placed}" "${REX_TEST_WINDOW:-window}" ;;
   *' ls '*) echo '{"sessions":[{"session_id":"session","label":"Same label"}]}' ;;
   *' session.focus_block '*) echo '{}' ;;
   *' process '*)
     if [ "$REX_TEST_PROCESS_ERROR" = missing ]; then echo 'Error: block target "block" not found' >&2; exit 3; fi
     if [ "$REX_TEST_PROCESS_ERROR" = denied ]; then echo 'permission denied' >&2; exit 3; fi
+    if [ "$REX_TEST_NO_CWD" = 1 ]; then echo '{"last_exit":null,"foreground":{}}'; exit 0; fi
     printf '{"last_exit":%s,"foreground":{"cwd":"%s"}}\n' "${REX_TEST_EXIT:-null}" "${REX_TEST_CWD:-/projects/current}" ;;
   *' pwd '*) printf '{"pwd":"%s"}\n' "${REX_TEST_PWD:-file://foreign.invalid/projects/current}" ;;
-  *' client.list '*) echo '{"clients":[]}' ;;
-  *' session.view '*) printf '{"active_window_id":"window","windows":[{"window_id":"window","focused_block_id":"block","zoomed_block_id":%s,"layers":[{"layout":{"rect":[0,0,1,%s],"block_id":"block"},"blocks":[{"block_id":"block","flavor":"com.superlogical.terminal.shell"}]}]}]}\n' "${REX_TEST_ZOOM:-null}" "${REX_TEST_FRACTION:-1}" ;;
-  *' size '*) printf '{"columns":160,"rows":%s}\n' "${REX_TEST_ROWS:-80}" ;;
-  *' session.new_layer '*) echo '{"layer_id":"popup","block_ids":["popup-block"],"revision":1}' ;;
+  *' client.list '*)
+    if [ "$REX_TEST_MULTIPLE_APPS" = 1 ]; then
+      echo '{"clients":[{"client_id":"one","info":{"kind":"app"},"connection_state":"connected"},{"client_id":"two","info":{"kind":"app"},"connection_state":"connected"}]}'
+    else echo '{"clients":[]}'; fi ;;
+  *' session.view '*) echo '{"active_window_id":"window","windows":[{"window_id":"window","focused_block_id":"block","zoomed_block_id":null,"layers":[{"layout":{"rect":[0,0,1,1],"block_id":"block"},"blocks":[{"block_id":"block","flavor":"com.superlogical.terminal.shell"}]}]}]}' ;;
   *' session.new_split '*) echo '{"block_ids":["new-pane"]}' ;;
   *' session.create '*) echo '{"session_id":"created","initial_windows":[{"window_id":"new-window","block_ids":["new-block"]}]}' ;;
   *) echo "unexpected rex call: $*" >&2; exit 1 ;;
@@ -38,15 +41,27 @@ esac
   assert(posix.setenv("REX_WORKTREES_LOCAL_ENDPOINT", "unix:///fixture.sock", true))
   local client = require("client")
   local remote = { key = "remote-id", label = "Remote", ["local"] = false, selector = "Remote" }
-  assert(client.connectMachine(remote).hostId == "remote-host")
+  local function connected() return rex.withOperation(function() return client.connectMachine(remote) end) end
+  assert(connected().hostId == "remote-host")
   assert(posix.setenv("REX_TEST_REMOTE_ENDPOINT", "unix:///remote-two", true))
   assert(posix.setenv("REX_TEST_REMOTE_HOST", "remote-host-2", true))
-  assert(not pcall(client.connectMachine, remote))
+  assert(not pcall(connected))
   assert(posix.setenv("REX_TEST_REGISTERED_ENDPOINT", "unix:///remote-two", true))
-  assert(client.connectMachine(remote).hostId == "remote-host-2")
+  assert(connected().hostId == "remote-host-2")
   assert(posix.setenv("REX_TEST_REMOTE_ENDPOINT", nil))
   assert(posix.setenv("REX_TEST_REGISTERED_ENDPOINT", nil))
   assert(posix.setenv("REX_TEST_REMOTE_HOST", nil))
+  local chooser = require("chooser")
+  local machineDraft = s.json.encode({
+    draft = { mode = "auto" }, origin = s.json.object(), originMachine = "remote-id",
+    projects = s.json.array(), sessions = s.json.array(), cloneRoot = "",
+  })
+  local machines = chooser.request({ op = "edit", field = "machine", state = machineDraft }, {})
+  assert(not machines.error and machines.editor.items[1].title == "Mac")
+  assert(machines.editor.items[2].title == "Remote" and machines.editor.items[2].detail == "Current terminal")
+  local selected = chooser.request({ op = "accept", state = machines.state, id = machines.editor.items[1].id }, {})
+  assert(not selected.error and selected.rows[2].value == "Mac")
+  assert(s.json.decode(selected.state).draft.host.hostId == "fixture-host")
   assert(rex.originDirectory("session", "block") == "/projects/current")
   assert(posix.setenv("REX_TEST_PWD", "file://localhost/projects/reported", true))
   assert(rex.originDirectory("session", "block") == "/projects/reported")
@@ -70,25 +85,12 @@ esac
   assert(split.sessionId == "session" and split.windowId == "anchor-window" and split.blockId == "new-pane")
   local created = rex.openTerminal({ kind = "new", name = "Same label" }, "Task", "/repo", { "/bin/sh" })
   assert(created.sessionId == "created" and created.windowId == "new-window" and created.blockId == "new-block")
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_FRACTION", "0.5", true))
-  assert(posix.setenv("REX_TEST_ROWS", "40", true))
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_ZOOM", '"block"', true))
-  assert(posix.setenv("REX_TEST_ROWS", "80", true))
-  rex.openPopup({ "/plugin", "popup" }, "session", { blockId = "block" })
-  assert(posix.setenv("REX_TEST_FRACTION", nil))
-  assert(posix.setenv("REX_TEST_ROWS", nil))
-  assert(posix.setenv("REX_TEST_ZOOM", nil))
   local calls = s.fs.readFileString(log)
   local found = false
   for line in calls:gmatch("[^\n]+") do
     local ok, value = pcall(s.json.decode, line)
-    if ok and type(value) == "table" and value.bounds then
-      assert(math.abs(value.bounds[3] - 82 / 160) < 1e-9 and math.abs(value.bounds[4] - 19 / 80) < 1e-9)
-      assert(value.layout.block.options.size.columns == 80 and value.layout.block.options.size.rows == 16)
+    if ok and type(value) == "table" and value.initial_windows then
       found = true
-    elseif ok and type(value) == "table" and value.initial_windows then
       assert(value.label == "Same label" and #value.initial_windows == 1)
       assert(value.initial_windows[1].layout.block.options.cwd == "/repo")
     end
@@ -116,6 +118,67 @@ esac
   s.fs.writeFileString(repo .. "/tracked", "base\n")
   git("add", "tracked")
   git("commit", "-m", "base")
+  local previousConfig = s.getenv("REX_WORKTREES_CONFIG")
+  local scanRoot = root .. "/projects"
+  s.fs.makeDirectory(scanRoot .. "/broken", { recursive = true })
+  s.fs.writeFileString(scanRoot .. "/broken/.git", "invalid gitfile\n")
+  assert(posix.setenv("REX_WORKTREES_CONFIG", s.json.encode({
+    directory = root, config = { roots = s.json.array({ scanRoot }) },
+  }), true))
+  local started = chooser.request({ op = "start", context = repo }, {})
+  assert(not started.error and not started.submitDisabled)
+  assert(started.rows[5].value == "main" and started.rows[6].value == repo)
+  local unavailable = chooser.request({ op = "edit", field = "project", state = started.state }, {})
+  assert(unavailable.error and not unavailable.editor)
+  s.fs.remove(scanRoot .. "/broken/.git")
+  s.run("git", { "init", "-b", "main", scanRoot .. "/other" })
+  local projects = chooser.request({ op = "edit", field = "project", state = started.state }, {})
+  assert(not projects.error and projects.editor)
+  local hasOther = false
+  for _, item in ipairs(projects.editor.items) do if item.title == "other" then hasOther = true end end
+  assert(hasOther and projects.rows[5].value == "main" and projects.rows[6].value == repo)
+  assert(posix.setenv("REX_WORKTREES_CONFIG", previousConfig, true))
+  local sourceCheckout, jjRepo = root .. "/source-context", root .. "/quick-jj"
+  git("worktree", "add", "-b", "source-context", sourceCheckout)
+  s.fs.writeFileString(sourceCheckout .. "/context-only", "selected checkout\n")
+  s.run("git", { "-C", sourceCheckout, "add", "context-only" })
+  s.run("git", { "-C", sourceCheckout, "commit", "-m", "source context" })
+  s.run("jj", { "git", "init", "--no-colocate", jjRepo })
+  s.run("jj", { "-R", jjRepo, "describe", "-m", "source context" })
+  local quickRoot = root .. "/quick-checkouts"
+  assert(posix.setenv("REX_WORKTREES_CONFIG", s.json.encode({
+    directory = root, config = { projects = {
+      { path = repo, worktreeRoot = quickRoot }, { path = jjRepo, worktreeRoot = quickRoot },
+    } },
+  }), true))
+  assert(posix.setenv("REX_TEST_MULTIPLE_APPS", "1", true))
+  for _, source in ipairs({ sourceCheckout, jjRepo }) do
+    local ready = chooser.request({ op = "start", context = source }, {})
+    assert(not ready.error)
+    local mode = chooser.request({ op = "edit", field = "mode", state = ready.state }, {})
+    ready = chooser.request({ op = "accept", state = mode.state, id = mode.editor.items[2].id }, {})
+    local original = s.json.decode(ready.state).draft.destination.worktree
+    local name = original.vcs == "git" and "quick-git" or "quick-jj"
+    local named = chooser.request({ op = "submit", state = ready.state, text = name }, {})
+    assert(not named.error and named.confirmation and not named.done)
+    assert(named.rows[3].value == "Same label" and named.rows[6].value == quickRoot .. "/" .. name)
+    assert(named.rows[7].value == "Always new tab")
+    local input = chooser.inputFor(s.json.decode(named.state).draft)
+    local plan = worktrees.planLaunch(input, "fixture-host")
+    assert((plan.base.head or plan.base.commitId) == original.head and input.repo == source)
+    for _, invalid in ipairs({ "", "../escape", "-bad", "bad\nname" }) do
+      local rejected = chooser.request({ op = "submit", state = ready.state, text = invalid }, {})
+      assert(rejected.error and not rejected.done and not rejected.confirmation)
+      assert(rejected.rows[6].value == source)
+    end
+  end
+  assert(not s.fs.exists(quickRoot))
+  assert(posix.setenv("REX_WORKTREES_CONFIG", previousConfig, true))
+  local default = chooser.request({ op = "start", context = sourceCheckout }, {})
+  local namedDefault = chooser.request({ op = "submit", state = default.state, text = "default-root" }, {})
+  assert(not namedDefault.error and namedDefault.confirmation)
+  assert(namedDefault.rows[6].value == repo .. ".worktrees/default-root")
+  assert(posix.setenv("REX_TEST_MULTIPLE_APPS", nil))
   local redirected = {
     vcs = "git",
     repo = repo,
@@ -139,11 +202,18 @@ esac
     blockId = "block",
   })
   assert(posix.setenv("REX_TEST_CWD", repo, true))
-  assert(posix.setenv("REX_TEST_PWD", repo, true))
+  assert(posix.setenv("REX_TEST_PWD", "file://localhost/stale", true))
   local existingInput =
     { vcs = "git", repo = repo, path = repo, name = "Task", session = { kind = "existing", id = "session" } }
   local reuse = worktrees.planLaunch(existingInput, "fixture-host")
   assert(reuse.action == "focus" and reuse.target.blockId == "block" and reuse.target.windowId == "window")
+  assert(posix.setenv("REX_TEST_PWD", repo, true))
+  assert(posix.setenv("REX_TEST_CWD", root, true))
+  assert(worktrees.planLaunch(existingInput, "fixture-host").action == "new-tab")
+  assert(posix.setenv("REX_TEST_CWD", repo, true))
+  assert(posix.setenv("REX_TEST_NO_CWD", "1", true))
+  assert(worktrees.planLaunch(existingInput, "fixture-host").action == "new-tab")
+  assert(posix.setenv("REX_TEST_NO_CWD", nil))
   local splitInput = {
     vcs = "git",
     repo = repo,

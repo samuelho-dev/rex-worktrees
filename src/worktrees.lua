@@ -76,10 +76,8 @@ local function liveBlock(sessionId, blockId, destination)
   then
     return false
   end
-  local reported = call("pwd", "RexDirectory")
-  if not reported or not reported.pwd or reported.pwd == system.json.null then return false end
-  local directory = rex.localDirectoryUri(reported.pwd)
-  if not directory then return false end
+  local directory = process.foreground.cwd
+  if type(directory) ~= "string" or not path.isAbsolute(directory) or directory:find("\0", 1, true) then return false end
   local ok, result = system.try(function() return fs.realPath(directory) end)
   if not ok then
     if system.missing(result) then return false end
@@ -436,6 +434,12 @@ function M.task(request)
   end)
 end
 
+local function sameOrigin(actual, requested)
+  if actual == requested then return true end
+  local a, b = git.githubRepository(actual), git.githubRepository(requested)
+  return a ~= nil and b ~= nil and a.identity == b.identity
+end
+
 function M.cloneDestination(destination, url, vcs, sourceHostId)
   vcs = vcs or "git"
   normalizedDirectory(destination, "Clone destination must be a normalized absolute directory")
@@ -476,7 +480,7 @@ function M.cloneDestination(destination, url, vcs, sourceHostId)
       end
       local actual = repo.vcs == "git" and git.origin(current)
         or jj.cloneSource(current, sourceHostId or rex.localHost().id, repo, false).url
-      if actual ~= url then system.fail("Clone destination belongs to a different origin: " .. current) end
+      if not sameOrigin(actual, url) then system.fail("Clone destination belongs to a different origin: " .. current) end
       return repo.commonDir
     end
     if parent == current then system.fail("Invalid clone destination") end
@@ -512,6 +516,17 @@ local function validateCloneDestination(input)
   if input.checkout == "primary" and input.worktreeName then
     system.fail("Primary checkout cannot have a worktree name")
   end
+  if input.vcs == "git" then
+    if input.branchMode == "default" then
+      if input.checkout ~= "primary" or input.branch ~= nil or input.worktreeName ~= nil or input.directory ~= nil then
+        system.fail("Default branch mode requires a primary checkout without a branch or worktree")
+      end
+    elseif input.branchMode == "existing" or input.branchMode == "create" then
+      git.validCloneBranch(input.branch, input.worktreeName)
+    else
+      system.fail("Invalid Git clone branch mode")
+    end
+  end
   if input.checkout == "worktree" and input.vcs == "jj" and not input.directory and not input.worktreeName then
     system.fail("JJ worktree checkout requires a workspace name or directory")
   end
@@ -533,9 +548,7 @@ function M.planClone(input, expectedHostId)
     system.fail("Requested Rex app client is not connected")
   end
   validName(input.name, "tab")
-  if input.vcs == "git" then
-    git.validCloneBranch(input.branch, input.worktreeName)
-  elseif input.worktreeName and not input.worktreeName:match("%S") then
+  if input.vcs == "jj" and input.worktreeName and not input.worktreeName:match("%S") then
     system.fail("JJ workspace name cannot be blank")
   end
   local ok, url = system.try(
@@ -549,6 +562,7 @@ function M.planClone(input, expectedHostId)
     existing
     and input.checkout == "primary"
     and input.vcs == "git"
+    and input.branchMode ~= "default"
     and (input.branchMode ~= "existing" or git.repositoryHead(input.repo).branch ~= input.branch)
   then
     system.fail("Existing primary checkout is not on the requested branch")
@@ -659,9 +673,8 @@ function M.prepareCloneCheckout(plan)
   local input = plan.input
   validateCloneDestination(input)
   if plan.repo ~= input.repo then system.fail("Clone destination changed since review") end
-  if plan.vcs == "git" then git.validCloneBranch(input.branch, input.worktreeName) end
   local ok, url = system.try(
-    function() return git.safeOrigin(input.source.url, input.source.sourceHostId == plan.hostId) end
+    function() return git.safeOrigin(input.source.url, input.source.sourceHostId ~= nil and input.source.sourceHostId == plan.hostId) end
   )
   if not ok then system.fail("Clone source URL is unsafe or local to another Rex host") end
   if url ~= input.source.url or input.vcs ~= plan.vcs then system.fail("Clone source changed since review") end
@@ -724,7 +737,7 @@ function M.prepareCloneCheckout(plan)
     system.fail("Clone repository changed; retained at " .. plan.repo)
   end
   local actual = repo.vcs == "git" and git.origin(repo.path) or jj.cloneSource(repo.path, plan.hostId, repo, false).url
-  if actual ~= url then system.fail("Clone origin changed; retained at " .. plan.repo) end
+  if not sameOrigin(actual, url) then system.fail("Clone origin changed; retained at " .. plan.repo) end
   local cwd
   if plan.vcs == "jj" then
     local base = plan.base or jj.resolveRevision(repo.path, "@-")
@@ -760,7 +773,7 @@ function M.prepareCloneCheckout(plan)
     local branch, mode = input.branch, input.branchMode
     if input.checkout == "primary" then
       if plan.existing then
-        if mode ~= "existing" or git.repositoryHead(repo.path).branch ~= branch then
+        if mode ~= "default" and (mode ~= "existing" or git.repositoryHead(repo.path).branch ~= branch) then
           system.fail("Existing primary checkout is not on the requested branch")
         end
       elseif mode == "create" then
@@ -768,7 +781,7 @@ function M.prepareCloneCheckout(plan)
           system.fail("Branch " .. branch .. " already exists; clone retained at " .. plan.repo)
         end
         git.createPrimaryBranch(repo.path, branch)
-      elseif git.repositoryHead(repo.path).branch ~= branch then
+      elseif mode ~= "default" and git.repositoryHead(repo.path).branch ~= branch then
         system.fail("Cloned primary checkout is not on " .. branch .. "; clone retained at " .. plan.repo)
       end
       cwd = repo.path

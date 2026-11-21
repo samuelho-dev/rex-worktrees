@@ -2,27 +2,19 @@
 
 A keyboard-driven [Rex](https://www.superlogical.com/rex/docs) plugin for opening and creating **Git worktrees** and **Jujutsu (JJ) workspaces**. Pick a project, machine, session, and worktree; it opens a shell there. No agent or model required.
 
-<img width="693" height="236" alt="image" src="https://github.com/user-attachments/assets/fadd8e3c-30fc-4f94-98ca-41132a23ff36" />
+![Native Open Worktree picker](https://raw.githubusercontent.com/samuelho-dev/rex-worktrees/main/.github/picker.png)
 
 ## Install
 
-Requires Rex and its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. Standalone builds support Apple Silicon macOS 15+ and Linux x64; no separately installed Lua runtime is needed.
+Requires Rex API 17 or newer, its CLI, a running Rex server, and Git 2.42+. JJ projects also need Jujutsu 0.46+. The native picker requires the standalone executable backend on each execution machine. Builds support Apple Silicon macOS 15+ and Linux x64; no separately installed Lua runtime is needed.
 
-**Install or update on macOS (Apple Silicon):**
-
-```sh
-npx --yes rex-worktrees@latest setup && rex config reload
-```
-
-The command installs the standalone executable and registers the Lua plugin with Rex. No executable path or global npm installation is needed. Run it from a shell that can find `rex`, `git`, and optionally `jj`; unrelated Rex settings are preserved. Rerun the command to update.
-
-**Without npm / Linux:** download your platform's archive from [GitHub Releases](https://github.com/samuelho-dev/rex-worktrees/releases/latest), verify it against `SHA256SUMS`, and extract it. From the extracted directory:
+On either platform, download its archive from [GitHub Releases](https://github.com/samuelho-dev/rex-worktrees/releases/latest), verify it against `SHA256SUMS`, and extract it. From the extracted directory, with `rex`, `git`, and optionally `jj` on your PATH:
 
 ```sh
 ./rex-worktrees setup && rex config reload
 ```
 
-Setup copies the executable to the same stable location, so the extracted directory is not needed afterward. `setup --bin /absolute/path/to/rex-worktrees` is only for keeping an executable at a custom or package-managed location.
+Setup installs the executable to a stable location and registers the Lua plugin with Rex, preserving unrelated Rex settings. The extracted directory is not needed afterward. Repeat these steps to update. `setup --bin /absolute/path/to/rex-worktrees` is for keeping an executable at a custom or package-managed location.
 
 ## Use
 
@@ -32,35 +24,25 @@ Open **Open Worktree…** from the Rex palette, or run:
 rex do worktrees_open
 ```
 
-The popup detects the source terminal's project, current worktree, branch or revision, and full directory path. Git worktrees are separate checkout directories sharing one repository—not separate repositories or branch names.
+The native summary picker detects the source terminal's project, current worktree, branch or revision, and full directory path. Select a field to edit it, then return to the summary. Escape returns from an editor or confirmation to the summary; Escape at the summary cancels without checkout changes. Git worktrees are separate checkout directories sharing one repository—not separate repositories or branch names.
+
+Type a new worktree name in the summary and press Enter on **Create or clone & open** to create and open it immediately, using the selected project, machine, session, mode, and worktree directory settings. Git uses the name for its branch and starts from the selected checkout's HEAD; JJ uses it for the workspace and keeps the selected starting revision. Alternatively, enter a GitHub repository clone URL to clone its primary checkout on the selected machine and open it in the selected session. The destination is the machine's configured or remembered clone root plus the repository name; Git or JJ uses the remote default. No project needs to be selected, and Git is used when no project or clone is selected. Existing checkouts are never switched or reset. You can still filter and select a setting or use **Open worktree / Create worktree & open**. The current repository loads first; the full configured project scan runs when you open **Project**.
 
 1. **Project:** select a discovered project or type an absolute repository path.
-2. **Machine:** choose this machine or an existing Rex host.
+2. **Machine:** choose a named Rex machine; **Current terminal** identifies the source server, not the machine hosting the native picker.
 3. **Session:** select an existing session, or type a name to create one.
 4. **Worktree / Workspace:** select an existing one, or choose **Create new worktree… / Create new workspace…**. This list contains worktrees, not branches or clone actions.
-5. **Branch:** **Create new worktree…** opens the branch editor directly, without another click on the form. Select an unused existing branch or type a new branch name. JJ uses **Start from** instead; a valid `trunk()` is selected automatically.
+5. **Branch:** **Create new worktree…** opens the branch editor directly. Select an unused existing branch or type a new branch name. JJ uses **Start from** instead; a valid `trunk()` is selected automatically.
 6. **Directory:** new worktrees get a proposed absolute path; change it only if needed. A new JJ workspace takes its name from the directory's final component.
-7. Choose **Open worktree / Create worktree & open**, or press **Ctrl+S** from the form. Accepting a field only updates the form; creation happens on submission.
+7. Choose **Open worktree / Create worktree & open** in the summary. Editing fields only updates the draft; creation happens on submission. Safety warnings may require confirmation.
 
 **Mode** reuses a matching tab by default; choose a new tab or split instead.
 
-For an **existing worktree**, Branch (or Revision) and Directory describe the detected checkout. They remain readable and **read-only—not disabled**; Tab skips them. Select a different worktree to open another checkout. For a **new worktree**, Branch and Directory are editable.
-
-The underlined `REX / WORKTREES` header, fields, and footer keep fixed positions. Editors and messages reuse the same details area, so only choice lists and long details scroll.
+For an **existing worktree**, Branch (or Revision) and Directory describe the detected checkout and are read-only. Select a different worktree to open another checkout. For a **new worktree**, Branch and Directory are editable.
 
 Shells and interactive Git/JJ clones stay attached to the destination terminal. The shell comes from `$SHELL`, falling back to `/bin/sh`.
 
-Rex owns terminal placement, focus, and popup cleanup. New sessions and their first terminal are created together; checkout/clone work then runs in that terminal independently of the chooser.
-Connection and review snapshots are operation-local: new sessions and forced new tabs skip reuse scans, and submission still checks fresh host and checkout state.
-
-| Key               | Action                                                            |
-| ----------------- | ----------------------------------------------------------------- |
-| Tab / Shift+Tab   | Move between fields and buttons                                   |
-| ↑ / ↓             | Navigate fields or choices                                        |
-| Enter             | Edit a field, accept its value, or activate a focused button      |
-| Ctrl+S            | Submit the form; inside an editor, only accept that field         |
-| Esc               | Return from an editor to the form; from the form, close the popup |
-| PageUp / PageDown | Scroll long details                                               |
+Rex owns terminal placement and focus. New sessions and their first terminal are created together; checkout/clone work then runs in that terminal independently of the chooser. Submission checks fresh host and checkout state.
 
 Optional shortcut—add outside the managed section of your Rex config, then reload:
 
@@ -83,9 +65,9 @@ Both settings are optional. `projects` lists repositories explicitly; `roots` di
 
 ### Other machines
 
-Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine. The helper protocol is v5; update all execution machines together.
+Install and run setup on each execution machine, with matching plugin versions and local Git/JJ tools. Connect the host through Rex first. Paths and configuration belong to the selected machine. The helper protocol is v5; when a protocol upgrade requires it, upgrade both execution machines together.
 
-If the selected machine lacks the project, the form proposes cloning it and shows the repository destination explicitly. **Directory** edits that path, and submission becomes **Clone & open**. Changing a field never starts a clone. The Worktree picker can also create a separate worktree after cloning; Directory then controls that worktree's path. Cloning opens a new tab. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
+If the selected machine lacks the project, the picker proposes cloning it and shows the repository destination explicitly. **Directory** edits that path, and submission becomes **Clone & open**. Changing a field never starts a clone. The Worktree picker can also create a separate worktree after cloning; Directory then controls that worktree's path. Cloning opens a new tab. Only pushed history transfers—not uncommitted work, unpublished changes, or credentials. Cross-host execution and cloning are experimental; live remote Linux destinations have not been verified.
 
 ## Safety
 
@@ -96,11 +78,10 @@ If the selected machine lacks the project, the form proposes cloning it and show
 
 ## CLI and development
 
-Run `rex-worktrees --help` for direct `open` commands and host/session options. `rex-worktrees popup` runs the chooser in the current terminal.
+Run `rex-worktrees --help` for direct `open` commands and host/session options.
 
 Source builds require a C compiler, make, curl, tar, a SHA-256 utility, and network access to download pinned dependencies. Lua and native modules are built locally; an installed Lua is not required.
-Regression tests also require Git, JJ, and Python 3; Python is used only by the terminal test drivers.
-Compiled popup scenarios disable `LUA_PATH` and `LUA_CPATH` to catch missing bundled modules.
+Regression tests also require Git, JJ, and Python 3.
 
 ```sh
 make check
@@ -112,9 +93,7 @@ rex config reload
 
 Source-build setup installs to `~/.local/bin/rex-worktrees`. To uninstall, remove the `BEGIN rex-worktrees` / `END rex-worktrees` section and adjacent `rex-worktrees.lua` from your active Rex config (`rex config check --json`), remove the executable, and reload. Repositories are retained.
 
-Releases publish the tested macOS archive to npm through GitHub Actions OIDC, then verify registry version and tarball integrity. The npm trusted publisher must authorize `samuelho-dev/rex-worktrees`, workflow `release.yml`, for direct publishing; no npm token is used. Tag a matching package version (`vX.Y.Z`) to release.
-
-Registry verification allows up to 120 checks, ten seconds apart, for npm processing. Publishing is not retried; an integrity mismatch still fails the release.
+Releases publish both tested platform archives and `SHA256SUMS` to GitHub. A Git version tag (`vX.Y.Z`) is the release authority.
 
 ## License
 

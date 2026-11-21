@@ -14,6 +14,12 @@ function M.withOperation(fn)
   return table.unpack(result, 2, result.n)
 end
 
+local function cached(key, read, ...)
+  if not operation or operation.pid ~= system.pid() then return read(...) end
+  if operation[key] == nil then operation[key] = read(...) end
+  return operation[key]
+end
+
 local function name(value) return value:lower():gsub("%.$", ""):gsub("%.local$", "") end
 function M.localDirectoryUri(raw)
   if type(raw) ~= "string" or raw:find("\0", 1, true) then return nil end
@@ -50,7 +56,8 @@ local function append(into, from)
   end
   return into
 end
-function M.machinesRegistry() return contracts.decode("RexRegistry", run({ "hosts", "list", "--json" })) end
+local function readRegistry() return contracts.decode("RexRegistry", run({ "hosts", "list", "--json" })) end
+function M.machinesRegistry() return cached("registry", readRegistry) end
 local function readLocalIdentity()
   local endpoint = system.getenv("REX_WORKTREES_LOCAL_ENDPOINT")
   if endpoint and endpoint:sub(1, 8) ~= "unix:///" then
@@ -70,11 +77,7 @@ local function readLocalIdentity()
   end
   return identity
 end
-local function localIdentity()
-  if not operation or operation.pid ~= system.pid() then return readLocalIdentity() end
-  if not operation.identity then operation.identity = readLocalIdentity() end
-  return operation.identity
-end
+local function localIdentity() return cached("identity", readLocalIdentity) end
 function M.rex(args)
   local endpoint = system.getenv("REX_WORKTREES_LOCAL_ENDPOINT")
   if endpoint and endpoint:sub(1, 8) ~= "unix:///" then
@@ -88,10 +91,20 @@ end
 function M.remoteRex(selector, args)
   return run(append({ "-S", selector, "--autostart=false", "--timeout", "30s" }, args))
 end
-function M.remoteIdentity(selector)
+local function remoteIdentity(selector)
   return contracts.decode("RexIdentity", M.remoteRex(selector, { "whoami", "--json" }))
 end
-function M.localHost() return { id = localIdentity().host_id, label = "This machine" } end
+function M.remoteIdentity(selector) return cached("identity:" .. selector, remoteIdentity, selector) end
+local function remoteActions(selector)
+  return contracts.decode("RexActions", M.remoteRex(selector, { "actions", "--json" }))
+end
+function M.remoteActions(selector) return cached("actions:" .. selector, remoteActions, selector) end
+function M.localHost()
+  local identity = localIdentity()
+  local https = identity.tailscale and not system.isNull(identity.tailscale) and identity.tailscale.https
+  return { id = identity.host_id, label = "This machine",
+    endpoint = https and not system.isNull(https) and https.url or identity.endpoint }
+end
 function M.listSessions()
   local result = json.array()
   for _, item in ipairs(contracts.decode("RexSessions", M.rex({ "ls", "--json" })).sessions) do
@@ -138,7 +151,7 @@ function M.originDirectory(sessionId, blockId)
   local cwd = info.foreground and info.foreground ~= json.null and info.foreground.cwd
   if type(cwd) == "string" and cwd:sub(1, 1) == "/" and not cwd:find("\0", 1, true) then return cwd end
 end
-local function terminalLayout(command, cwd, label, completion, size)
+local function terminalLayout(command, cwd, label)
   local argv = json.array()
   local path, config = system.getenv("PATH"), system.getenv("REX_WORKTREES_CONFIG")
   if path or config then
@@ -147,8 +160,7 @@ local function terminalLayout(command, cwd, label, completion, size)
     if config then argv[#argv + 1] = "REX_WORKTREES_CONFIG=" .. config end
   end
   append(argv, command)
-  local options = { command = argv, shell = "none", cwd = cwd, exit = { on_completion = completion or false } }
-  if size then options.size = size end
+  local options = { command = argv, shell = "none", cwd = cwd, exit = { on_completion = false } }
   return { block = { flavor = "com.superlogical.terminal.shell", label = label, options = options } }
 end
 function M.openTerminal(session, label, cwd, command, target)
@@ -236,102 +248,7 @@ function M.focus(sessionId, windowId, blockId, clientId)
   end
   if #warnings > 0 then return table.concat(warnings, "; ") end
 end
-local function findPane(node, blockId)
-  if not node or node == json.null then return nil end
-  if node.block_id == blockId then return node end
-  if node.split and node.split ~= json.null then
-    return findPane(node.split.before, blockId) or findPane(node.split.after, blockId)
-  end
-end
-function M.openPopup(command, sessionId, origin)
-  origin = origin or {}
-  local view = contracts.decode(
-    "RexView",
-    M.rex({ "api", "call", "-s", sessionId, "session.view", json.encode({ session_id = sessionId }) })
-  )
-  local source, owner
-  for _, window in ipairs(view.windows) do
-    for _, layer in ipairs(window.layers) do
-      for _, block in ipairs(layer.blocks) do
-        if block.block_id == origin.blockId then
-          source, owner = window, block.owner
-        end
-      end
-    end
-  end
-  if origin.blockId and not source then system.fail("Source pane is no longer in the selected Rex session") end
-  local windowId = source and source.window_id or view.active_window_id
-  local window
-  for _, item in ipairs(view.windows) do
-    if item.window_id == windowId then
-      window = item
-      break
-    end
-  end
-  if not window then system.fail("No active Rex window for the popup") end
-  local clients, clientId = M.listClients()
-  for _, id in ipairs({ owner or false, origin.clientId or false }) do
-    for _, client in ipairs(clients) do
-      if id and id == client.id then
-        clientId = id
-        break
-      end
-    end
-    if clientId then break end
-  end
-  local popupCommand = json.array()
-  append(popupCommand, command)
-  if clientId then append(popupCommand, { "--origin-client", clientId }) end
-  local first, focused, selected
-  for _, layer in ipairs(window.layers) do
-    for _, block in ipairs(layer.blocks) do
-      if block.flavor == "com.superlogical.terminal.shell" then
-        first = first or block
-        if block.block_id == window.focused_block_id then focused = block end
-        if block.block_id == origin.blockId then selected = block end
-      end
-    end
-  end
-  local terminal = selected or focused or first
-  local width, height = 1, 1
-  local size = contracts.popupSize
-  if terminal then
-    local pane
-    for _, layer in ipairs(window.layers) do
-      pane = findPane(layer.layout, terminal.block_id)
-      if pane then break end
-    end
-    if not pane then system.fail("Rex terminal geometry changed before opening the popup") end
-    local actual =
-      contracts.decode("RexTerminalSize", M.rex({ "block", "call", "-s", sessionId, "-b", terminal.block_id, "size" }))
-    local zoomed = window.zoomed_block_id == terminal.block_id
-    width = math.min(1, (size.columns + 2) * (zoomed and 1 or pane.rect[3]) / actual.columns)
-    height = math.min(1, (size.rows + 3) * (zoomed and 1 or pane.rect[4]) / actual.rows)
-  end
-  local request = {
-    session_id = sessionId,
-    window_id = windowId,
-    bounds = json.array({ (1 - width) / 2, (1 - height) / 2, width, height }),
-    layout = terminalLayout(popupCommand, system.cwd(), "Worktrees", true, size),
-    focus = true,
-  }
-  local created =
-    contracts.decode("RexLayer", M.rex({ "api", "call", "-s", sessionId, "session.new_layer", json.encode(request) }))
-  local hasBlock = false
-  if created.block_ids and not system.isNull(created.block_ids) then
-    for _, id in ipairs(created.block_ids) do
-      if id and not system.isNull(id) then
-        hasBlock = true
-        break
-      end
-    end
-  end
-  if not created.layer_id or system.isNull(created.layer_id) or not hasBlock then
-    system.fail("Rex did not return a floating terminal layer")
-  end
-  return created
-end
-for _, key in ipairs({ "localBlocks", "originDirectory", "openPopup", "taskContext", "focus" }) do
+for _, key in ipairs({ "localBlocks", "originDirectory", "taskContext", "focus" }) do
   local fn = M[key]
   M[key] = function(...)
     local args = table.pack(...)

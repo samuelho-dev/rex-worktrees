@@ -1,121 +1,5 @@
 return function()
-  local ui, s = require("ui"), require("runtime")
-  local rows = {
-    { id = "project", label = "Project", value = "atelier" },
-    { id = "machine", label = "Machine", value = "Homelab", detail = "Host ID: host-remote" },
-    { id = "session", label = "Session", value = "session-123" },
-    { id = "destination", label = "Worktree", value = "feature", detail = "Destination details" },
-    { id = "branch", label = "Branch", value = "feature" },
-    { id = "checkoutName", label = "Directory", value = "/projects/atelier.worktrees/feature" },
-    { id = "mode", label = "Mode", value = "Auto" },
-  }
-  local view = { rows = rows, submitLabel = "Create worktree & open" }
-  local function lines(frame)
-    local out = {}
-    for line in (frame .. "\r\n"):gmatch("(.-)\r\n") do
-      out[#out + 1] = line
-    end
-    return out
-  end
-  for _, dimensions in ipairs({ { 80, 16 }, { 82, 18 } }) do
-    local rendered = lines(ui.renderFormFrame(view, "machine", dimensions[1], dimensions[2], false))
-    assert(#rendered == dimensions[2])
-    assert(rendered[1]:find("REX / WORKTREES", 1, true))
-    for i, label in ipairs({ "PROJECT", "MACHINE", "SESSION", "WORKTREE", "BRANCH", "DIRECTORY", "MODE" }) do
-      assert(rendered[i + 2]:find(label, 1, true))
-    end
-    for _, line in ipairs(rendered) do
-      assert(s.unicode.width(line) == dimensions[1])
-    end
-    assert(rendered[#rendered]:find("Tab next", 1, true))
-  end
-  assert(ui.renderFormFrame(view, "submit", 80, 16, false):find("Destination details", 1, true))
-  local malicious = "\27[2J\27]0;hijack\7\226\128\174VISIBLE\nNEXT"
-  local frame = ui.renderFormFrame({ rows = rows, submitLabel = "Open", error = malicious }, "machine", 60, 20, false)
-  assert(not frame:find("\27", 1, true) and not frame:find("\7", 1, true) and not frame:find("\226\128\174", 1, true))
-  assert(frame:find("NEXT", 1, true))
-  local longError = "Cannot open " .. string.rep("details ", 60) .. "END OF ERROR"
-  local first =
-    lines(ui.renderFormFrame({ rows = rows, submitLabel = "Open", error = longError }, "project", 80, 16, false))
-  local last = lines(
-    ui.renderFormFrame(
-      { rows = rows, submitLabel = "Open", error = longError },
-      "mode",
-      80,
-      16,
-      false,
-      { detailOffset = 999 }
-    )
-  )
-  assert(table.concat(first, " "):find("PgDn", 1, true))
-  assert(table.concat(last, " "):find("END OF ERROR", 1, true))
-  assert(first[5]:find("SESSION", 1, true) and last[9]:find("MODE", 1, true))
-  local choices = { { value = "one", title = "One" }, { value = "feature", title = "feature" } }
-  local typed = ui.advanceInputChoice({ text = "", selected = nil }, "f", "feature", choices)
-  assert(typed._tag == "NextFrame" and typed.state.text == "feature" and typed.state.selected == nil)
-  local submitted = ui.advanceInputChoice(typed.state, "enter", "", choices)
-  assert(submitted._tag == "Submit" and submitted.value.kind == "typed" and submitted.value.text == "feature")
-  local picked = ui.advanceInputChoice(typed.state, "down", "", choices)
-  submitted = ui.advanceInputChoice(picked.state, "enter", "", choices)
-  assert(submitted._tag == "Submit" and submitted.value.kind == "selected" and submitted.value.value == "feature")
-  local deleted = ui.advanceInputChoice({ text = "a👩‍💻" }, "backspace", "", choices)
-  assert(deleted.state.text == "a")
-  assert(ui.advanceInputChoice({ text = "" }, "paste", "\0", choices)._tag == "Beep")
-  assert(ui.advanceInputChoice({ text = "custom" }, "enter", "", choices, true)._tag == "Beep")
-  local exact = ui.advanceInputChoice({ text = "", selected = 1 }, "ctrl_s", "", choices, true)
-  assert(exact._tag == "Submit" and exact.value.kind == "selected" and exact.value.value == "feature")
-  assert(ui.advanceInputChoice({ text = "missing" }, "ctrl_s", "", choices, true)._tag == "Beep")
-  assert(ui.advanceInputChoice(typed.state, "alt_x", "", choices)._tag == "Beep")
-  assert(ui.advanceInputChoice(typed.state, "ctrl_d", "", choices)._tag == "Beep")
-  local editor = ui.renderInputChoice(
-    { text = "", selected = 0 },
-    { { value = "base", title = "main\27]2;hijack\7\nnext", description = "commit\27[2J\nsecond" } },
-    60,
-    false
-  )
-  assert(not table.concat(editor):find("\27", 1, true) and not table.concat(editor):find("\7", 1, true))
-  for _, line in ipairs(editor) do
-    assert(s.unicode.width(line) <= 60)
-  end
-  local items = {}
-  for i = 0, 19 do
-    items[#items + 1] = { value = i, title = "Choice " .. i }
-  end
-  for _, selectedIndex in ipairs({ 0, 19 }) do
-    local dock = ui.renderInputChoice({ text = "", selected = selectedIndex }, items, 80, false)
-    local rendered =
-      lines(ui.renderFormFrame(view, "project", 80, 16, false, { editor = { title = "Project", lines = dock } }))
-    assert(#rendered == 16 and rendered[11]:find("Type new value", 1, true))
-    for i = 12, 14 do
-      assert(rendered[i]:find("Choice", 1, true))
-    end
-    assert(table.concat(rendered, " "):find("› Choice " .. selectedIndex, 1, true))
-    assert(rendered[16]:find("Esc back", 1, true))
-  end
-  local unsafeRows = {}
-  for i, row in ipairs(rows) do
-    unsafeRows[i] = { id = row.id, label = row.label, value = malicious, detail = malicious }
-  end
-  local unsafeFrame = ui.renderFormFrame(
-    { rows = unsafeRows, error = malicious },
-    "machine",
-    60,
-    20,
-    false,
-    { editor = { title = malicious, lines = editor } }
-  )
-  assert(
-    not unsafeFrame:find("\27", 1, true)
-      and not unsafeFrame:find("\7", 1, true)
-      and not unsafeFrame:find("\226\128\174", 1, true)
-  )
-  assert(ui.renderFormFrame(view, "project", 80, 8, false):find("Resize", 1, true))
-  assert(ui.advanceInputChoice({ text = "" }, "paste", "\127", choices)._tag == "Beep")
-  assert(ui.advanceInputChoice({ text = "" }, "paste", "\194\128", choices).state.text == "\194\128")
-  assert(ui.advanceInputChoice(picked.state, "paste", "é/木", choices).state.text == "featureé/木")
-  assert(ui.advanceInputChoice(typed.state, "ctrl_u", "", choices).state.text == "")
-  local escaped = ui.advanceInputChoice(typed.state, "escape", "", choices)
-  assert(escaped._tag == "Submit" and (escaped.value == nil or s.isNull(escaped.value)))
+  local ui, s = require("chooser"), require("runtime")
   local host = { key = "local", selector = "", label = "local", ["local"] = true, hostId = "host" }
   local repo = { vcs = "git", path = "/projects/alpha", commonDir = "/git/alpha", name = "alpha" }
   local draft = {
@@ -252,4 +136,65 @@ return function()
   assert(#s.json.encode({ request = s.json.encode(request) }) < 65536)
   local switched = ui.changeProjectChoice(draft, { name = "beta" })
   assert(switched.project == nil and switched.destination == nil and switched.session.id == "session")
+  local state = s.json.encode({
+    draft = { mode = "auto", host = host, machine = host }, origin = s.json.object(), projects = s.json.array(),
+    sessions = s.json.array(), cloneRoot = "",
+  })
+  local editing = ui.request({ op = "edit", state = state, field = "mode" }, {})
+  assert(#editing.rows == 7 and editing.editor and #editing.editor.items == 3)
+  local invalid = ui.request({ op = "accept", state = editing.state, id = "missing" }, {})
+  assert(invalid.error and invalid.editor and invalid.submitDisabled)
+  local accepted = ui.request({ op = "accept", state = editing.state, id = editing.editor.items[2].id }, {})
+  assert(not accepted.editor and accepted.rows[7].value == "Always new tab")
+  local cancelled = ui.request({ op = "cancel", state = editing.state }, {})
+  assert(not cancelled.editor and cancelled.rows[7].value == "Reuse matching tab, otherwise new tab")
+
+  local client = require("client")
+  local discover, review, reviewClone = client.connectAndDiscover, client.review, client.reviewClone
+  local ok, err = xpcall(function()
+    local reviewed
+    client.connectAndDiscover = function(machine)
+      assert(machine.key == "local")
+      return { host = host, cloneRoot = "/remote/projects" }
+    end
+    client.reviewClone = function(selectedHost, _, request)
+      assert(selectedHost.hostId == "host")
+      reviewed = request
+      return { hostId = "host", repo = request.repo, input = request, warning = "Review" }
+    end
+    local function chooserState(project)
+      return s.json.encode({
+        draft = { mode = "auto", host = host, machine = host, project = project,
+          projectChoice = project and { name = project.name } or nil,
+          session = { kind = "existing", id = "session" } },
+        origin = s.json.object(), projects = s.json.array(), sessions = s.json.array(), cloneRoot = "/stale",
+      })
+    end
+    for _, value in ipairs({ "https://github.com/owner", "git@github.com:owner/", "https://example.com/a/b",
+      "github.com/owner/repo", "ssh:/github.com/owner/repo" }) do
+      local rejected = ui.request({ op = "submit", state = chooserState(repo), text = value }, {})
+      assert(rejected.error and rejected.error:find("repository clone URL", 1, true))
+    end
+    local response = ui.request({ op = "submit", state = chooserState(), text = "https://github.com/owner/example.git" }, {})
+    assert(response.confirmation and reviewed.repo == "/remote/projects/example" and reviewed.session.id == "session")
+    assert(reviewed.checkout == "primary" and reviewed.branchMode == "default" and reviewed.branch == nil)
+    assert(reviewed.source.url == "https://github.com/owner/example.git" and reviewed.source.sourceHostId == nil)
+    assert(response.rows[5].value == "Remote default")
+    response = ui.request({ op = "submit", state = chooserState(jjrepo), text = "git@github.com:owner/example.git" }, {})
+    assert(response.confirmation and reviewed.vcs == "jj" and reviewed.revision == nil and reviewed.source.revision == nil)
+    local cancelledConfirmation = ui.request({ op = "cancel", state = response.state }, {})
+    local revisionEditor = ui.request({ op = "edit", state = cancelledConfirmation.state, field = "branch" }, {})
+    local invalidRevision = ui.request({ op = "accept", state = revisionEditor.state, text = "trunk()" }, {})
+    assert(invalidRevision.error and invalidRevision.error:find("without a source Rex checkout", 1, true))
+    client.review = function(selectedHost, _, input)
+      return { hostId = selectedHost.hostId, path = input.directory, warning = "Review" }
+    end
+    local named = ui.request({ op = "submit", state = chooserState(repo), text = "topic@work" }, {})
+    assert(named.confirmation and named.rows[5].value == "topic@work")
+    client.connectAndDiscover = function() return { host = { hostId = "changed" }, cloneRoot = "/other" } end
+    local changed = ui.request({ op = "submit", state = chooserState(), text = "https://github.com/owner/example" }, {})
+    assert(changed.error and changed.error:find("identity changed", 1, true))
+  end, debug.traceback)
+  client.connectAndDiscover, client.review, client.reviewClone = discover, review, reviewClone
+  assert(ok, err)
 end

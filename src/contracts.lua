@@ -121,11 +121,11 @@ local session =
 schemas.SessionSelection = session
 local target = shape({ id = S, label = S })
 local gitSource =
-  shape({ vcs = literal("git"), url = S, sourceHostId = S, branches = optional(array(S)), branch = optional(S) })
+  shape({ vcs = literal("git"), url = S, sourceHostId = optional(S), branches = optional(array(S)), branch = optional(S) })
 local jjSource = shape({
   vcs = literal("jj"),
   url = S,
-  sourceHostId = S,
+  sourceHostId = optional(S),
   revisions = optional(array(choice)),
   revision = optional(revision),
 })
@@ -150,11 +150,13 @@ local jjInput = shape(extend(commonInput, {
 local input = union(gitInput, jjInput)
 local cloneCommon =
   extend(commonInput, { worktreeName = optional(S), checkout = optional(literal("primary", "worktree")) })
-local gitClone = shape(
-  extend(
-    cloneCommon,
-    { vcs = literal("git"), source = gitSource, branch = S, branchMode = literal("existing", "create") }
-  )
+local defaultGitClone =
+  shape(extend(cloneCommon, { vcs = literal("git"), source = gitSource, branchMode = literal("default"), checkout = literal("primary") }))
+local gitClone = union(
+  shape(extend(cloneCommon, { vcs = literal("git"), source = gitSource, branch = S, branchMode = literal("existing", "create") })),
+  { predicate = function(v)
+    return check(defaultGitClone, v) and v.branch == nil and v.worktreeName == nil and v.directory == nil
+  end }
 )
 local jjClone = shape(extend(cloneCommon, { vcs = literal("jj"), source = jjSource, revision = optional(S) }))
 local cloneInput = union(gitClone, jjClone)
@@ -299,7 +301,52 @@ local function variants(entries)
 end
 schemas.Request = variants(req)
 schemas.Response = variants(res)
-define("RexIdentity", { host_id = S, endpoint = S, principal = shape({ transport = S }) })
+local chooserField = literal("project", "machine", "session", "destination", "branch", "checkoutName", "mode")
+define("ChooserRequest", {
+  op = literal("start", "edit", "accept", "cancel", "submit", "confirm"),
+  state = optional(S),
+  origin = optional(shape({ sessionId = optional(S), blockId = optional(S), clientId = optional(S), server = optional(S) })),
+  context = optional(S),
+  machine = optional(S),
+  field = optional(chooserField),
+  id = optional(S),
+  text = optional(S),
+})
+define("ChooserState", {
+  draft = shape({ mode = literal("auto", "new-tab", "split") }),
+  origin = shape({ sessionId = optional(S), blockId = optional(S), clientId = optional(S), server = optional(S) }),
+  originMachine = optional(S),
+  projects = array(A),
+  projectsLoaded = optional(B),
+  sessions = array(A),
+  cloneRoot = S,
+  editor = optional(shape({
+    field = chooserField, kind = literal("pick", "input"), title = S,
+    choices = array(shape({ id = S, value = A, title = S, detail = optional(S) })), allowOther = B,
+  })),
+  confirmation = optional(shape({ warning = S })),
+  blocked = optional(B), done = optional(B), error = optional(S), notice = optional(S),
+})
+define("ChooserResponse", {
+  state = optional(S),
+  rows = array(shape({ id = chooserField, label = S, value = S, detail = optional(S),
+    disabled = optional(B), isReadOnly = optional(B) })),
+  submitLabel = S, submitDisabled = B, error = optional(S), notice = optional(S),
+  editor = optional(shape({
+    kind = literal("pick", "input"), title = S,
+    items = array(shape({ id = S, title = S, subtitle = optional(S), detail = optional(S) })),
+    allowOther = B, value = optional(S),
+  })),
+  confirmation = optional(shape({ title = S, detail = S })),
+  done = optional(B), result = optional(union(launchResult, cloneResult)),
+})
+define("RexIdentity", {
+  host_id = S, endpoint = S, principal = shape({ transport = S }),
+  tailscale = optional(nullable(shape({ https = optional(nullable(shape({ url = optional(S) }))) }))),
+})
+define("RexHosts", {
+  hosts = nullable(array(shape({ label = S, endpoints = array(S), host_id = optional(S) }))),
+})
 define("RexSessions", { sessions = array(shape({ session_id = S, label = S })) })
 define("RexCreated", { window_id = S, block_ids = array(S) })
 define("RexSplitCreated", { block_ids = array(S) })
@@ -370,5 +417,4 @@ end
 return {
   validate = validate,
   decode = function(name, text) return validate(name, json.decode(text)) end,
-  popupSize = { columns = 80, rows = 16 },
 }
